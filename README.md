@@ -13,7 +13,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. The public Open Library demo can import `internetarchive/openlibrary` without signing in. To connect a private or personal repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, and a random `SESSION_SECRET` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
+Open `http://localhost:3000`. Sign in with GitHub, install the read-only app for repositories you choose, and select one repository to create your workspace. Any repository available to that installation can be selected; OpenLibrary is only one possible personal demo target. To connect a repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, and a random `SESSION_SECRET` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
 
 ## Free self-hosted deployment
 
@@ -37,7 +37,7 @@ FalkorDB uses the Redis protocol at `redis://localhost:6379`; its optional brows
 
 ## Graph model
 
-Each connected user and repository gets a separate FalkorDB graph. The public Open Library demo uses `engram_openlibrary`.
+Each connected user and repository gets a separate FalkorDB graph. A workspace only becomes available after GitHub sign-in and an explicit repository selection; no repository is preselected or publicly imported.
 
 | Node | Useful properties |
 |---|---|
@@ -60,7 +60,7 @@ Edges encode repository membership, authorship, opened work, submitted reviews, 
 
 ## Freshness and import bounds
 
-Every import requests the newest updated pull requests and issues first with `cache: no-store`, stores `syncedAt` and `latestActivityAt`, and removes work items and commits that have fallen outside the bounded index. GitHub's transient server errors receive short retries. Primary or secondary rate limits return HTTP 429 with `Retry-After` and `retryAt`; a failed refresh does not delete or overwrite the last successful graph snapshot. Workspace views read the cached graph first and continue to show it if refresh is unavailable. The GitHub App sync indexes up to 200 PRs and 200 issues. It fetches reviews, comments, and changed files for up to the 50 most recently updated PRs and comments for up to the 50 most recently updated issues. Commit and contributor lists are capped at 200 and 100 respectively. Each record body is truncated before it enters the graph. The public demo uses smaller 20-item windows and detailed activity for its newest 10 PRs and issues.
+Every import requests the newest updated pull requests and issues first with `cache: no-store`, stores `syncedAt` and `latestActivityAt`, and removes work items and commits that have fallen outside the bounded index. GitHub's transient server errors receive short retries. Primary or secondary rate limits return HTTP 429 with `Retry-After` and `retryAt`; a failed refresh does not delete or overwrite the last successful graph snapshot. Workspace views read the cached graph first and continue to show it if refresh is unavailable. The GitHub App sync indexes up to 200 PRs and 200 issues. It fetches reviews, comments, and changed files for up to the 50 most recently updated PRs and comments for up to the 50 most recently updated issues. Commit and contributor lists are capped at 200 and 100 respectively. Each record body is truncated before it enters the graph. Imports use the same bounded windows for every selected repository.
 
 This is a recent-activity memory, not a complete archive. Data outside the import windows is not searchable. Sync currently runs when the user requests an import; webhook-driven refresh and a background incremental job are future deployment work. A production service also needs a durable user database, account deletion/export flow, operational logging policy, and managed secret storage. The app can run as a self-hosted service today, but a public multi-tenant launch still needs those operational controls, abuse protection, monitoring, and a deployment domain; a local Docker setup alone is not a hosted production service.
 
@@ -72,10 +72,8 @@ This is a recent-activity memory, not a complete archive. Data outside the impor
 - `POST /api/github/sync` — bounded repository import into the user/repository graph.
 - `GET /api/github/sync` — serve the last successful private-repository snapshot without calling GitHub.
 - `GET /api/github/status`, `POST /api/github/logout` — connection status and local sign-out.
-- `POST /api/openlibrary` — refresh the public Open Library demo graph.
-- `GET /api/openlibrary` — serve its last successful cached graph snapshot without calling GitHub.
-- `POST /api/openlibrary/ask` and `POST /api/chat` — routed graph query with answer, evidence, Cypher, memory, and handoff metadata.
-- `GET /api/graph/explore` and `GET /api/node/:nodeId` — graph shape, node attributes, and relationship attributes.
+- `POST /api/chat` — routed graph query for the signed-in user’s selected repository, with answer, evidence, Cypher, memory, and handoff metadata.
+- `GET /api/graph/explore` and `GET /api/node/:nodeId` — graph shape, node attributes, and relationship attributes for the selected repository; both require a signed-in session.
 
 ## Checks
 

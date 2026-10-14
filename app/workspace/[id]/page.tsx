@@ -1,2 +1,2 @@
-import { OpenLibraryWorkspace } from '@/components/openlibrary-workspace';
-export default function Page(){return <OpenLibraryWorkspace/>}
+import { RepositoryWorkspace } from '@/components/repository-workspace';
+export default function Page(){return <RepositoryWorkspace/>}

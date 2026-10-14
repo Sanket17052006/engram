@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { nodes, edges } from '@/lib/agent';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
 import { privateGraphName, readSession } from '@/lib/github-session';
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url); const q = (searchParams.get('q') ?? '').toLowerCase();
-  if (isFalkorConfigured()) {
+  const session=await readSession();
+  if(!session)return NextResponse.json({error:'Sign in with GitHub and select a repository first.'},{status:401});
+  if(!session.selectedRepo)return NextResponse.json({error:'Select a repository before exploring a graph.'},{status:409});
+  if (!isFalkorConfigured()) return NextResponse.json({error:'FalkorDB is not configured.'},{status:503});
+  {
     try {
-      const session=await readSession();const graph=await getGraph(session?.selectedRepo?privateGraphName(session.id,session.selectedRepo):searchParams.get('workspace')?`engram_${searchParams.get('workspace')}`:undefined);
+      const graph=await getGraph(privateGraphName(session.id,session.selectedRepo));
       const result = await graph.query('MATCH (a)-[r]->(b) RETURN id(a) AS sourceId, labels(a) AS sourceLabels, a AS source, type(r) AS relation, properties(r) AS relationProperties, id(b) AS targetId, labels(b) AS targetLabels, b AS target LIMIT 250');
       const records = (result as { data?: Record<string, unknown>[] }).data ?? [];
       const mappedNodes = new Map<string, { id: string; label: string; type: string; properties: Record<string, unknown> }>();
@@ -42,13 +44,10 @@ export async function GET(request: Request) {
                       : {};
         return { id:`edge-${index}`,source:a,target:b,type:relation,properties:Object.keys(storedRelationProps).length?storedRelationProps:inferredRelationProps };
       });
-      return NextResponse.json({ nodes:Array.from(mappedNodes.values()),edges:mappedEdges,meta:{source:'falkordb',workspace:searchParams.get('workspace') ?? 'company',repository:session?.selectedRepo??'internetarchive/openlibrary'} });
+      return NextResponse.json({ nodes:Array.from(mappedNodes.values()),edges:mappedEdges,meta:{source:'falkordb',repository:session.selectedRepo} });
     } catch (error) {
       console.error('FalkorDB graph exploration failed:', error);
       return NextResponse.json({ error:'FalkorDB graph exploration failed.' }, { status:503 });
     }
   }
-  const selected = nodes.filter(n => !q || n.label.toLowerCase().includes(q) || n.type.toLowerCase().includes(q));
-  const ids = new Set(selected.map(n => n.id));
-  return NextResponse.json({ nodes:selected,edges:edges.filter(e => ids.has(e.source) && ids.has(e.target)),meta:{source:'mock',workspace:searchParams.get('workspace') ?? 'company',repository:'sample/acme'} });
 }

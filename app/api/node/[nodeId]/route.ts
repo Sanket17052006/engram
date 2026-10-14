@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
 import { privateGraphName, readSession } from '@/lib/github-session';
-import { nodes as mockNodes, edges as mockEdges } from '@/lib/agent';
 
 type GraphNode = { labels?: string[]; properties?: Record<string, unknown> };
 function unwrap(value: unknown): GraphNode {
@@ -13,11 +12,13 @@ function unwrap(value: unknown): GraphNode {
 }
 export async function GET(request: Request, { params }: { params: Promise<{ nodeId: string }> }) {
   const { nodeId } = await params;
-  if (isFalkorConfigured() && /^\d+$/.test(nodeId)) {
+  const session = await readSession();
+  if (!session) return NextResponse.json({ error: 'Sign in with GitHub and select a repository first.' }, { status: 401 });
+  if (!session.selectedRepo) return NextResponse.json({ error: 'Select a repository before viewing graph records.' }, { status: 409 });
+  if (!isFalkorConfigured()) return NextResponse.json({ error: 'FalkorDB is not configured.' }, { status: 503 });
+  if (/^\d+$/.test(nodeId)) {
     try {
-      const session = await readSession();
-      const repository = session?.selectedRepo ?? 'internetarchive/openlibrary';
-      const graph = await getGraph(session?.selectedRepo ? privateGraphName(session.id, repository) : 'engram_openlibrary');
+      const graph = await getGraph(privateGraphName(session.id, session.selectedRepo));
       const result = await graph.query(`MATCH (node) WHERE id(node)=$nodeId
         OPTIONAL MATCH (node)-[relationship]-(other)
         RETURN labels(node) AS labels,node AS node,type(relationship) AS relationshipType,properties(relationship) AS relationshipProperties,
@@ -37,8 +38,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ node
       return NextResponse.json({ error: 'Could not load node details from FalkorDB.' }, { status: 503 });
     }
   }
-  const node = mockNodes.find((item) => item.id === nodeId);
-  if (!node) return NextResponse.json({ error: 'Node not found' }, { status: 404 });
-  const relationships = mockEdges.filter((edge) => edge.source === node.id || edge.target === node.id);
-  return NextResponse.json({ ...node, relationships, graph: 'mock' });
+  return NextResponse.json({ error: 'Node not found in this repository graph.' }, { status: 404 });
 }

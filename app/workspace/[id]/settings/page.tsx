@@ -1,2 +1,2 @@
-import { OpenLibrarySettings } from '@/components/openlibrary-settings';
-export default function Page(){return <OpenLibrarySettings/>}
+import { RepositorySettings } from '@/components/repository-settings';
+export default function Page(){return <RepositorySettings/>}

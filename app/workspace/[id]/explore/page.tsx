@@ -1,2 +1,2 @@
-import { OpenLibraryExplorer } from '@/components/openlibrary-explorer';
-export default function Page(){return <OpenLibraryExplorer/>}
+import { RepositoryExplorer } from '@/components/repository-explorer';
+export default function Page(){return <RepositoryExplorer/>}

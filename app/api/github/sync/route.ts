@@ -186,7 +186,6 @@ export async function POST(request: Request) {
       imported: { people: people.length, pullRequests: pulls.length, issues: issues.length, commits: commits.length, reviews: reviews.length, comments: comments.length, files: changedFiles.length },
     });
     await setSession(response, { ...session, selectedRepo: repository.full_name }, new URL(request.url).protocol === 'https:');
-    response.cookies.set('engram_onboarding_done', '1', { httpOnly: true, sameSite: 'lax', secure: new URL(request.url).protocol === 'https:', path: '/', maxAge: 60 * 60 * 24 * 365 });
     return response;
   } catch (error) {
     console.error('GitHub repository sync failed:', error);

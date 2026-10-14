@@ -38,49 +38,26 @@ test('repository endpoints require an authenticated GitHub session', async () =>
   const privateSnapshot = await fetch(new URL('/api/github/sync', baseUrl));
   assert.equal(privateSnapshot.status, 401);
   const sync = await fetch(new URL('/api/github/sync', baseUrl), {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repository: 'internetarchive/openlibrary' }),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repository: 'example-org/example-repository' }),
   });
   assert.equal(sync.status, 401);
 });
 
-test('graph-backed questions validate input and run against FalkorDB', async () => {
-  const empty = await fetch(new URL('/api/openlibrary/ask', baseUrl), {
+test('chat validates input and requires a selected GitHub repository', async () => {
+  const empty = await fetch(new URL('/api/chat', baseUrl), {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '   ' }),
   });
   assert.equal(empty.status, 400);
-
-  for (const prompt of ['Who should review PR #442?', 'Who knows OAuth?', 'What decision explains OAuth?', 'What changed around OAuth?']) {
-    const { response, data } = await getJson('/api/openlibrary/ask', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt }),
-    });
-    assert.equal(response.status, 200, `${prompt}: ${data.error ?? 'request failed'}`);
-    assert.equal(data.source, 'falkordb');
-    assert.ok(['openai','graph-template'].includes(data.answerMode));
-    assert.ok(data.cypher.includes('MATCH'));
-    assert.equal(typeof data.answer, 'string');
-  }
+  const { response, data } = await getJson('/api/chat', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Who should review PR #442?' }),
+  });
+  assert.equal(response.status, 401);
+  assert.match(data.error, /sign in/i);
 });
 
-test('graph explorer returns graph-shaped results', async () => {
-  const { response, data } = await getJson('/api/graph/explore?workspace=openlibrary', { cache: 'no-store' });
-  assert.equal(response.status, 200);
-  assert.ok(Array.isArray(data.nodes));
-  assert.ok(Array.isArray(data.edges));
-  if (data.nodes.length) {
-    assert.ok(data.nodes.some((node) => Object.keys(node.properties ?? {}).length > 0), 'graph nodes should expose source attributes');
-  }
-  if (data.edges.length) {
-    assert.ok(data.edges.some((edge) => Object.keys(edge.properties ?? {}).length > 0), 'graph relationships should expose context attributes');
-  }
-});
-
-test('public project cache is served without making a GitHub API request', async () => {
-  const { response, data } = await getJson('/api/openlibrary', { cache: 'no-store' });
-  assert.ok([200, 404].includes(response.status));
-  if (response.status === 200) {
-    assert.equal(data.source, 'falkordb-cache');
-    assert.ok(Array.isArray(data.pulls));
-    assert.ok(Array.isArray(data.issues));
-    assert.equal(typeof data.syncedAt, 'string');
-  }
+test('graph and node APIs require an authenticated selected repository', async () => {
+  const graph = await fetch(new URL('/api/graph/explore', baseUrl), { cache: 'no-store' });
+  assert.equal(graph.status, 401);
+  const node = await fetch(new URL('/api/node/1', baseUrl), { cache: 'no-store' });
+  assert.equal(node.status, 401);
 });
