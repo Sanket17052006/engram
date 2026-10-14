@@ -1,2 +1,2 @@
-import { ExplorePage } from '@/components/workspace-ui';
-export default function Page(){return <ExplorePage/>}
+import { OpenLibraryExplorer } from '@/components/openlibrary-explorer';
+export default function Page(){return <OpenLibraryExplorer/>}

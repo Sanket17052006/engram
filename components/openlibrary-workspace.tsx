@@ -45,6 +45,7 @@ export function OpenLibraryWorkspace() {
       <a className="side-link active" href="#overview"><Activity/><span>Overview</span></a>
       <a className="side-link" href="#activity"><GitPullRequest/><span>Pull requests & issues</span></a>
       <a className="side-link" href="#ask"><MessageSquareText/><span>Ask the project</span></a>
+      <Link href="/workspace/openlibrary/explore" className="side-link"><GitPullRequest/><span>Explore graph</span></Link>
       <div className="side-spacer"/><div className="graph-status"><small><i className="status-pulse"/> DATA SOURCE</small><p>github.com/internetarchive/openlibrary</p></div>
       <Link href="/setup/github" className="side-link"><Github/><span>Connect another repo</span></Link>
     </aside>

@@ -11,10 +11,15 @@ export async function GET(request: Request) {
       const mappedNodes = new Map<string, { id: string; label: string; type: string; properties: Record<string, unknown> }>();
       const mappedEdges = records.map((row, index) => {
         const a = String(row.sourceId); const b = String(row.targetId);
-        const sourceLabels = row.sourceLabels as string[]; const targetLabels = row.targetLabels as string[];
-        const sourceProps = row.source as Record<string, unknown>; const targetProps = row.target as Record<string, unknown>;
-        if (!mappedNodes.has(a)) mappedNodes.set(a, { id:a,label:String(sourceProps.name ?? sourceProps.title ?? a),type:sourceLabels?.[0] ?? 'Node',properties:sourceProps });
-        if (!mappedNodes.has(b)) mappedNodes.set(b, { id:b,label:String(targetProps.name ?? targetProps.title ?? b),type:targetLabels?.[0] ?? 'Node',properties:targetProps });
+        const sourceNode = row.source as { labels?: string[]; properties?: Record<string, unknown> };
+        const targetNode = row.target as { labels?: string[]; properties?: Record<string, unknown> };
+        const sourceLabels = (row.sourceLabels as string[] | undefined) ?? sourceNode?.labels ?? [];
+        const targetLabels = (row.targetLabels as string[] | undefined) ?? targetNode?.labels ?? [];
+        const sourceProps = sourceNode?.properties ?? row.source as Record<string, unknown>;
+        const targetProps = targetNode?.properties ?? row.target as Record<string, unknown>;
+        const label = (props:Record<string,unknown>,labels:string[],id:string) => String(props.title ?? props.login ?? props.fullName ?? `${labels[0] ?? 'Node'} ${props.number ?? id}`);
+        if (!mappedNodes.has(a)) mappedNodes.set(a, { id:a,label:label(sourceProps,sourceLabels,a),type:sourceLabels?.[0] ?? 'Node',properties:sourceProps });
+        if (!mappedNodes.has(b)) mappedNodes.set(b, { id:b,label:label(targetProps,targetLabels,b),type:targetLabels?.[0] ?? 'Node',properties:targetProps });
         return { id:`edge-${index}`,source:a,target:b,type:String(row.relation) };
       });
       return NextResponse.json({ nodes:Array.from(mappedNodes.values()),edges:mappedEdges,meta:{source:'falkordb',workspace:searchParams.get('workspace') ?? 'company'} });
