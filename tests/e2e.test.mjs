@@ -14,6 +14,7 @@ test('GitHub status reports configured services without exposing credentials', a
   assert.equal(data.databaseConfigured, true);
   assert.equal(data.appConfigured, true);
   assert.equal(data.authenticated, false);
+  assert.equal(typeof data.llmConfigured, 'boolean');
   assert.equal('token' in data, false);
   assert.equal('clientSecret' in data, false);
 });
@@ -34,6 +35,8 @@ test('GitHub OAuth start uses state and PKCE with the configured callback', asyn
 test('repository endpoints require an authenticated GitHub session', async () => {
   const repos = await fetch(new URL('/api/github/repos', baseUrl));
   assert.equal(repos.status, 401);
+  const privateSnapshot = await fetch(new URL('/api/github/sync', baseUrl));
+  assert.equal(privateSnapshot.status, 401);
   const sync = await fetch(new URL('/api/github/sync', baseUrl), {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repository: 'internetarchive/openlibrary' }),
   });
@@ -52,6 +55,7 @@ test('graph-backed questions validate input and run against FalkorDB', async () 
     });
     assert.equal(response.status, 200, `${prompt}: ${data.error ?? 'request failed'}`);
     assert.equal(data.source, 'falkordb');
+    assert.ok(['openai','graph-template'].includes(data.answerMode));
     assert.ok(data.cypher.includes('MATCH'));
     assert.equal(typeof data.answer, 'string');
   }
@@ -67,5 +71,16 @@ test('graph explorer returns graph-shaped results', async () => {
   }
   if (data.edges.length) {
     assert.ok(data.edges.some((edge) => Object.keys(edge.properties ?? {}).length > 0), 'graph relationships should expose context attributes');
+  }
+});
+
+test('public project cache is served without making a GitHub API request', async () => {
+  const { response, data } = await getJson('/api/openlibrary', { cache: 'no-store' });
+  assert.ok([200, 404].includes(response.status));
+  if (response.status === 200) {
+    assert.equal(data.source, 'falkordb-cache');
+    assert.ok(Array.isArray(data.pulls));
+    assert.ok(Array.isArray(data.issues));
+    assert.equal(typeof data.syncedAt, 'string');
   }
 });

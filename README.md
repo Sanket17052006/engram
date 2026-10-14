@@ -4,7 +4,7 @@ Engram turns GitHub repository activity into a graph-backed project memory. Peop
 
 ## Run locally
 
-Requirements: Node.js 20+, Docker, and a GitHub App for private repository access.
+Requirements: Node.js 22+, a persistent FalkorDB instance, and a GitHub App for user-connected repositories. Set `OPENAI_API_KEY` to enable natural-language answer synthesis; graph retrieval and deterministic answers continue to work without it.
 
 ```sh
 npm install
@@ -15,7 +15,23 @@ npm run dev
 
 Open `http://localhost:3000`. The public Open Library demo can import `internetarchive/openlibrary` without signing in. To connect a private or personal repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, and a random `SESSION_SECRET` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
 
+## Free self-hosted deployment
+
+For a no-monthly-compute-cost beta, the best fit is one OCI Always Free Ampere VM running the app, Caddy, and FalkorDB in Docker. Oracle currently lists up to 2 OCPUs and 12 GB RAM in its Always Free A1 allowance. This avoids putting private repository data in a free database tier without continuous persistence/backups. A single free VM is still one failure domain: it is suitable for a personal beta or small pilot, not a high-availability or guaranteed-SLA production service. Oracle may reclaim Always Free instances it considers idle; keep backups outside that VM. [OCI Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+
+Vercel Hobby is a poor fit for the full stack: its cron jobs run at most daily and it does not host the FalkorDB process. Render's free services spin down after inactivity and have ephemeral local filesystems, which is unsuitable for the graph volume. [Vercel cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing), [Render free service limits](https://render.com/docs/free)
+
+1. Provision an Ubuntu OCI A1 VM, attach the public IP to a DNS name, and open only SSH, HTTP, and HTTPS in the cloud firewall. Do not expose port 6379.
+2. Install Docker Engine and Compose on the VM, clone this repository, and copy `.env.production.example` to `.env.production`.
+3. Set a random hex `FALKORDB_PASSWORD` and `SESSION_SECRET`, enter the GitHub App credentials, and add an `OPENAI_API_KEY` if AI answer synthesis is wanted. Configure the GitHub App callback and setup URLs with `https://<your-domain>/api/github/auth/callback` and `https://<your-domain>/api/github/callback`.
+4. Point the domain to the VM and run `docker compose --env-file .env.production -f docker-compose.production.yml up -d --build`. Caddy obtains and renews HTTPS certificates. FalkorDB has authentication, append-only persistence, a named data volume, and no public port.
+5. Pin `FALKORDB_IMAGE` to a version tested by your deployment before inviting users. Set a recurring off-instance backup and test restore before storing data you cannot afford to lose.
+
+The graph is served from the last successful snapshot while a GitHub refresh is rate-limited; retries are explicit and GitHub's `Retry-After` is returned. This build still uses user-triggered imports. Webhook-driven continuous sync, a managed job queue, automated off-site backup verification, and account deletion/export are required before offering it as a generally available multi-tenant service.
+
 The GitHub App needs read-only **Metadata**, **Issues**, **Pull requests**, and **Contents** repository permissions. Contents access is used for commit history; the rest of the sync continues with a warning if that permission is unavailable. Configure the user callback as `http://localhost:3000/api/github/auth/callback` and the installation setup URL as `http://localhost:3000/api/github/callback`. Do not enable “Request user authorization during installation”; Engram has a separate PKCE sign-in step. Install the app only on repositories you choose.
+
+For a deployed instance, register the production callback and setup URLs on the GitHub App, use HTTPS, provide a stable `SESSION_SECRET`, and set the FalkorDB URL to a private network endpoint with authentication/TLS where supported. Configure `OPENAI_API_KEY` and optionally `OPENAI_MODEL` on the server to turn on natural-language answer synthesis. Engram sends the user question plus up to 12 bounded graph results and source links to that configured OpenAI account; requests set `store: false`. Without an LLM key, the graph tools still query FalkorDB and return their deterministic evidence summary. The answer panel indicates which mode produced the answer.
 
 FalkorDB uses the Redis protocol at `redis://localhost:6379`; its optional browser UI is on `http://localhost:3001`. The project overview reports when the latest import completed and the newest activity timestamp found.
 
@@ -44,9 +60,9 @@ Edges encode repository membership, authorship, opened work, submitted reviews, 
 
 ## Freshness and import bounds
 
-Every import requests the newest updated pull requests and issues first with `cache: no-store`, stores `syncedAt` and `latestActivityAt`, and removes work items and commits that have fallen outside the bounded index. The GitHub App sync indexes up to 200 PRs and 200 issues. It fetches reviews, comments, and changed files for up to the 50 most recently updated PRs and comments for up to the 50 most recently updated issues. Commit and contributor lists are capped at 200 and 100 respectively. Each record body is truncated before it enters the graph. The public demo uses smaller 20-item windows and detailed activity for its newest 10 PRs and issues.
+Every import requests the newest updated pull requests and issues first with `cache: no-store`, stores `syncedAt` and `latestActivityAt`, and removes work items and commits that have fallen outside the bounded index. GitHub's transient server errors receive short retries. Primary or secondary rate limits return HTTP 429 with `Retry-After` and `retryAt`; a failed refresh does not delete or overwrite the last successful graph snapshot. Workspace views read the cached graph first and continue to show it if refresh is unavailable. The GitHub App sync indexes up to 200 PRs and 200 issues. It fetches reviews, comments, and changed files for up to the 50 most recently updated PRs and comments for up to the 50 most recently updated issues. Commit and contributor lists are capped at 200 and 100 respectively. Each record body is truncated before it enters the graph. The public demo uses smaller 20-item windows and detailed activity for its newest 10 PRs and issues.
 
-This is a recent-activity memory, not a complete archive. Data outside the import windows is not searchable. Sync currently runs when the user requests an import; webhooks and a background incremental job are future deployment work. A production service also needs a durable user database, account deletion/export flow, operational logging policy, and managed secret storage.
+This is a recent-activity memory, not a complete archive. Data outside the import windows is not searchable. Sync currently runs when the user requests an import; webhook-driven refresh and a background incremental job are future deployment work. A production service also needs a durable user database, account deletion/export flow, operational logging policy, and managed secret storage. The app can run as a self-hosted service today, but a public multi-tenant launch still needs those operational controls, abuse protection, monitoring, and a deployment domain; a local Docker setup alone is not a hosted production service.
 
 ## API routes
 
@@ -54,8 +70,10 @@ This is a recent-activity memory, not a complete archive. Data outside the impor
 - `GET /api/github/start` and `/api/github/callback` — installation handoff, account verification, and session binding.
 - `GET /api/github/repos` — repositories visible to the verified installation.
 - `POST /api/github/sync` — bounded repository import into the user/repository graph.
+- `GET /api/github/sync` — serve the last successful private-repository snapshot without calling GitHub.
 - `GET /api/github/status`, `POST /api/github/logout` — connection status and local sign-out.
 - `POST /api/openlibrary` — refresh the public Open Library demo graph.
+- `GET /api/openlibrary` — serve its last successful cached graph snapshot without calling GitHub.
 - `POST /api/openlibrary/ask` and `POST /api/chat` — routed graph query with answer, evidence, Cypher, memory, and handoff metadata.
 - `GET /api/graph/explore` and `GET /api/node/:nodeId` — graph shape, node attributes, and relationship attributes.
 

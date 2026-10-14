@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
 import { privateGraphName, readSession } from '@/lib/github-session';
+import { answerFromGraph } from '@/lib/llm';
 
 type Row = Record<string, unknown>;
 type Intent = 'reviewer-router' | 'expertise-finder' | 'decision-trace' | 'project-guide';
@@ -123,6 +124,18 @@ export async function POST(request: Request) {
       return term ? previousQuestion.includes(term) || normalizedPrompt.split(/\s+/).some((word: string) => word.length > 4 && previousQuestion.includes(word)) : true;
     }).slice(0, 3);
     if (relevantMemories.length) answer += ` This connects to an earlier question in your workspace: “${String(relevantMemories[0].question).slice(0, 180)}”.`;
+    const sources = intent === 'reviewer-router'
+      ? rows.flatMap(row => [
+          { title: `PR #${String(row.number ?? number)} · ${String(row.targetTitle ?? '')}`, url: String(row.targetUrl ?? ''), role: 'Target pull request' },
+          ...(Array.isArray(row.evidence) ? row.evidence as Row[] : []).map(item => ({ title: `PR #${String(item.number ?? '')} · ${String(item.title ?? '')}`, url: String(item.url ?? ''), role: 'Related review history' })),
+        ]).filter(source => source.url)
+      : rows.flatMap(row => [
+        { title: `#${String(row.number ?? '')} · ${String(row.title ?? row.login ?? 'Contributor')}`, url: String(row.url ?? ''), role: String(row.kind ?? 'Contributor evidence') },
+        ...(Array.isArray(row.discussion) ? row.discussion as Row[] : []).map(item => ({ title: 'Related discussion', url: String(item.url ?? ''), role: 'Source comment' })),
+      ]).filter(source => source.url);
+    const generatedAnswer = await answerFromGraph({ prompt, repository, intent, rows, sources, memories: relevantMemories });
+    const answerMode = generatedAnswer ? 'openai' : 'graph-template';
+    if (generatedAnswer) answer = generatedAnswer;
     const agentName = intent === 'reviewer-router' ? 'Reviewer Router' : intent === 'expertise-finder' ? 'Expertise Finder' : intent === 'decision-trace' ? 'Decision Trace' : 'Project Guide';
     const createdAt = new Date().toISOString();
     const episodeId = randomUUID();
@@ -142,16 +155,7 @@ export async function POST(request: Request) {
       await graph.query(`MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(episode:Episode)
         WHERE episode.userId=$userId WITH episode ORDER BY episode.createdAt DESC SKIP 100 DETACH DELETE episode`, { params: { repo: repository, userId: String(session.id) } });
     }
-    const sources = intent === 'reviewer-router'
-      ? rows.flatMap(row => [
-          { title: `PR #${String(row.number ?? number)} · ${String(row.targetTitle ?? '')}`, url: String(row.targetUrl ?? ''), role: 'Target pull request' },
-          ...(Array.isArray(row.evidence) ? row.evidence as Row[] : []).map(item => ({ title: `PR #${String(item.number ?? '')} · ${String(item.title ?? '')}`, url: String(item.url ?? ''), role: 'Related review history' })),
-        ]).filter(source => source.url)
-      : rows.flatMap(row => [
-        { title: `#${String(row.number ?? '')} · ${String(row.title ?? row.login ?? 'Contributor')}`, url: String(row.url ?? ''), role: String(row.kind ?? 'Contributor evidence') },
-        ...(Array.isArray(row.discussion) ? row.discussion as Row[] : []).map(item => ({ title: 'Related discussion', url: String(item.url ?? ''), role: 'Source comment' })),
-      ]).filter(source => source.url);
-    return NextResponse.json({ source: 'falkordb', repository, prompt, intent, answer, rows, sources, cypher, params, memory: { used: relevantMemories.length > 0, count: relevantMemories.length, recent: relevantMemories }, handoff: { from: 'Context Retriever', to: agentName }, episodeId });
+    return NextResponse.json({ source: 'falkordb', repository, prompt, intent, answer, answerMode, llmConfigured: Boolean(process.env.OPENAI_API_KEY), rows, sources, cypher, params, memory: { used: relevantMemories.length > 0, count: relevantMemories.length, recent: relevantMemories }, handoff: { from: 'Context Retriever', to: agentName }, episodeId });
   } catch (error) {
     console.error('Graph-backed question failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'FalkorDB query failed.' }, { status: 503 });

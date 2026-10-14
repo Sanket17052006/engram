@@ -1,2 +1,5 @@
 import { OpenLibraryNodePage } from '@/components/openlibrary-node';
-export default function Page({params}:{params:{nodeId:string}}){return <OpenLibraryNodePage nodeId={params.nodeId}/>}
+export default async function Page({params}:{params:Promise<{nodeId:string}>}){
+  const {nodeId}=await params;
+  return <OpenLibraryNodePage nodeId={nodeId}/>;
+}

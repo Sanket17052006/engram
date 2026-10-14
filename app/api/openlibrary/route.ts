@@ -1,20 +1,24 @@
 import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
+import { readRepositoryCache } from '@/lib/repository-cache';
+import { GithubApiError, githubApi } from '@/lib/github-app';
 
 export const runtime = 'nodejs';
 const repo = 'internetarchive/openlibrary';
 const windowSize = 20;
 const detailSize = 10;
-const ghHeaders = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
 type Person = { login: string; html_url: string; avatar_url: string; type?: string };
 type Activity = { id: number; number: number; title: string; state: string; body: string | null; html_url: string; updated_at: string; created_at: string; closed_at: string | null; comments: number; user: Person; pull_request?: unknown; labels?: { name: string }[] };
 type Review = { id: number; state: string; body: string | null; html_url: string; submitted_at: string | null; user: Person | null };
 type Comment = { id: number; body: string | null; html_url: string; created_at: string; updated_at?: string; user: Person | null };
 type ChangedFile = { filename: string; status: string; additions: number; deletions: number; changes: number; blob_url: string | null };
+export async function GET(){
+  if(!isFalkorConfigured())return NextResponse.json({error:'FalkorDB is not configured.'},{status:503});
+  try{const snapshot=await readRepositoryCache(await getGraph('engram_openlibrary'),'engram_openlibrary',repo);return snapshot?NextResponse.json({...snapshot,source:'falkordb-cache'}):NextResponse.json({error:'No successful Open Library import is cached yet.'},{status:404})}
+  catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not read the cached repository graph.'},{status:503})}
+}
 async function get<T>(path: string): Promise<T> {
-  const response = await fetch(`https://api.github.com${path}`, { headers: ghHeaders, cache: 'no-store' });
-  if (!response.ok) throw new Error(`GitHub API returned ${response.status}. Add GITHUB_TOKEN if the public API limit was reached.`);
-  return response.json() as Promise<T>;
+  return githubApi<T>(path,process.env.GITHUB_TOKEN);
 }
 const compact = (item: Activity) => ({ number: item.number, title: item.title, state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', updated_at: item.updated_at, comments: item.comments ?? 0 });
 
@@ -61,7 +65,7 @@ export async function POST() {
     ];
     if (isFalkorConfigured()) {
       const graph = await getGraph('engram_openlibrary');
-      await graph.query('MERGE (r:Repository {fullName:$repo}) SET r += $properties', { params: { repo, properties: { fullName: repo, name: 'openlibrary', url: `https://github.com/${repo}`, importedAt: syncedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length } } });
+      await graph.query('MERGE (r:Repository {fullName:$repo}) SET r += $properties', { params: { repo, properties: { fullName: repo, name: 'openlibrary', url: `https://github.com/${repo}`, importedAt: syncedAt, lastSyncedAt:syncedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length,indexedReviews:reviews.length,indexedFiles:files.length,indexedComments:comments.length } } });
       if (people.length) await graph.query('UNWIND $rows AS row MERGE (person:Contributor {login:row.login}) SET person += row', { params: { rows: people } });
       await graph.query(`UNWIND $rows AS row MATCH (repo:Repository {fullName:$repo})
         MERGE (item:WorkItem {id:row.id}) SET item += row MERGE (repo)-[membership:HAS_ITEM]->(item)
@@ -93,6 +97,7 @@ export async function POST() {
     });
   } catch (error) {
     console.error('Open Library import failed:', error);
+    if(error instanceof GithubApiError&&error.rateLimited){const retrySeconds=Math.max(1,Math.ceil((Date.parse(error.retryAt??'')-Date.now())/1000)||60);return NextResponse.json({error:'GitHub has temporarily limited repository reads. The last successful graph snapshot is still available; retry after the supplied time.',code:'GITHUB_RATE_LIMITED',retryAt:error.retryAt,retryAfterSeconds:retrySeconds},{status:429,headers:{'Retry-After':String(retrySeconds)}})}
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Could not load Open Library activity.' }, { status: 502 });
   }
 }

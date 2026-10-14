@@ -1,0 +1,70 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      FALKORDB_URL: redis://:${FALKORDB_PASSWORD}@falkordb:6379
+    expose:
+      - "3000"
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/github/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    networks:
+      - internal
+
+  falkordb:
+    image: ${FALKORDB_IMAGE:-falkordb/falkordb-server:latest}
+    restart: unless-stopped
+    environment:
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD}
+      REDIS_ARGS: --requirepass ${FALKORDB_PASSWORD} --appendonly yes --appendfsync everysec
+      FALKORDB_ARGS: THREAD_COUNT 2
+    volumes:
+      - falkordb_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$FALKORDB_PASSWORD\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  falkordb_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge

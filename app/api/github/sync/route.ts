@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
-import { githubApi, installationToken } from '@/lib/github-app';
+import { GithubApiError, githubApi, installationToken } from '@/lib/github-app';
 import { privateGraphName, readSession, setSession } from '@/lib/github-session';
+import { readRepositoryCache } from '@/lib/repository-cache';
 
 export const runtime = 'nodejs';
 const ITEM_WINDOW = 200;
@@ -36,6 +37,15 @@ const compact = (item: { number: number; title: string; state: string; html_url:
   number: item.number, title: item.title, state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', updated_at: item.updated_at, comments: item.comments ?? 0,
 });
 
+export async function GET(){
+  const session=await readSession();
+  if(!session)return NextResponse.json({error:'Sign in with GitHub before reading a private repository snapshot.'},{status:401});
+  if(!session.selectedRepo)return NextResponse.json({error:'Choose a repository before reading its snapshot.'},{status:409});
+  if(!isFalkorConfigured())return NextResponse.json({error:'FalkorDB is not configured.'},{status:503});
+  try{const name=privateGraphName(session.id,session.selectedRepo);const snapshot=await readRepositoryCache(await getGraph(name),name,session.selectedRepo);return snapshot?NextResponse.json({...snapshot,source:'falkordb-cache'}):NextResponse.json({error:'No successful repository import is cached yet.'},{status:404})}
+  catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not read the cached repository graph.'},{status:503})}
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const fullName = typeof body.repository === 'string' ? body.repository.trim() : '';
@@ -49,6 +59,11 @@ export async function POST(request: Request) {
   if (!isFalkorConfigured()) return NextResponse.json({ error: 'Add FALKORDB_URL before importing repository data.' }, { status: 503 });
 
   try {
+    const graphName=privateGraphName(session.id,fullName);
+    const graph=await getGraph(graphName);
+    const priorGraphState=await graph.query(`MATCH (r:Repository {fullName:$fullName})-[:HAS_ITEM]->(item:WorkItem)
+      RETURN item.number AS number,item.kind AS kind,item.detailUpdatedAt AS detailUpdatedAt`,{params:{fullName}}) as {data?:{number:number;kind:string;detailUpdatedAt?:string}[]};
+    const detailCursor=new Map((priorGraphState.data??[]).map(item=>[`${item.kind}:${item.number}`,String(item.detailUpdatedAt??'')]));
     const token = await installationToken(session.installationId);
     const prefix = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}`;
     const repository = await githubApi<Repo>(prefix, token);
@@ -61,7 +76,11 @@ export async function POST(request: Request) {
     ]);
     const commits=commitResult.rows;
     const issues = issueRows.filter((item) => !item.pull_request);
-    const pullDetails = await inBatches(pulls.slice(0, DETAIL_WINDOW), 5, async (pr) => {
+    const pullCandidates=pulls.filter(pr=>pr.updated_at>(detailCursor.get(`PR:${pr.number}`)??''));
+    const issueCandidates=issues.filter(issue=>issue.updated_at>(detailCursor.get(`Issue:${issue.number}`)??''));
+    const detailedPulls=pullCandidates.slice(0,DETAIL_WINDOW);
+    const detailedIssues=issueCandidates.slice(0,DETAIL_WINDOW);
+    const pullDetails = await inBatches(detailedPulls, 5, async (pr) => {
       const [reviews, reviewComments, issueComments, files] = await Promise.all([
         pages<Review>(`${prefix}/pulls/${pr.number}/reviews`, token, 200),
         pages<Comment>(`${prefix}/pulls/${pr.number}/comments`, token, 200),
@@ -70,9 +89,11 @@ export async function POST(request: Request) {
       ]);
       return { number: pr.number, reviews, comments: [...reviewComments, ...issueComments], files };
     });
-    const issueDetails = await inBatches(issues.slice(0, DETAIL_WINDOW), 5, async (issue) => ({
+    const issueDetails = await inBatches(detailedIssues, 5, async (issue) => ({
       number: issue.number, comments: await pages<Comment>(`${prefix}/issues/${issue.number}/comments`, token, 200),
     }));
+    for(const item of detailedPulls)detailCursor.set(`PR:${item.number}`,item.updated_at);
+    for(const item of detailedIssues)detailCursor.set(`Issue:${item.number}`,item.updated_at);
 
     const peopleByLogin = new Map<string, User>();
     const knownPeople = [
@@ -82,32 +103,21 @@ export async function POST(request: Request) {
       ...issueDetails.flatMap((detail) => detail.comments.map((comment) => comment.user)).filter((user): user is User => Boolean(user)),
     ];
     for (const person of knownPeople) if (person?.login) peopleByLogin.set(person.login, person);
-    const activity = new Map<string, { pullRequestsOpened:number; issuesOpened:number; reviewsSubmitted:number; commentsWritten:number; commitsAuthored:number; lastActivityAt:string }>();
-    const recordActivity = (login:string|undefined, key:'pullRequestsOpened'|'issuesOpened'|'reviewsSubmitted'|'commentsWritten'|'commitsAuthored', date:string) => {
-      if(!login)return;
-      const stats=activity.get(login)??{pullRequestsOpened:0,issuesOpened:0,reviewsSubmitted:0,commentsWritten:0,commitsAuthored:0,lastActivityAt:''};
-      stats[key]+=1;if(date>stats.lastActivityAt)stats.lastActivityAt=date;activity.set(login,stats);
-    };
-    for(const item of pulls)recordActivity(item.user?.login,'pullRequestsOpened',item.updated_at);
-    for(const item of issues)recordActivity(item.user?.login,'issuesOpened',item.updated_at);
-    for(const detail of pullDetails){for(const review of detail.reviews)recordActivity(review.user?.login,'reviewsSubmitted',review.submitted_at??'');for(const comment of detail.comments)recordActivity(comment.user?.login,'commentsWritten',comment.updated_at??comment.created_at);}
-    for(const detail of issueDetails)for(const comment of detail.comments)recordActivity(comment.user?.login,'commentsWritten',comment.updated_at??comment.created_at);
-    for(const commit of commits)recordActivity(commit.author?.login,'commitsAuthored',commit.commit.author?.date??'');
     const latestActivityAt = [...pulls.map((item) => item.updated_at), ...issues.map((item) => item.updated_at)].sort().at(-1) ?? null;
 
-    const graph = await getGraph(privateGraphName(session.id, repository.full_name));
+    if(repository.full_name.toLowerCase()!==fullName.toLowerCase())return NextResponse.json({error:'The selected repository name did not match the GitHub repository.'},{status:409});
     const importedAt = new Date().toISOString();
     await graph.query('MERGE (r:Repository {fullName:$fullName}) SET r += $properties', { params: {
       fullName: repository.full_name,
-      properties: { fullName: repository.full_name, name: repository.name, url: repository.html_url, description: repository.description ?? '', defaultBranch: repository.default_branch, private: repository.private, importedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length, indexedCommits:commits.length },
+      properties: { fullName: repository.full_name, name: repository.name, url: repository.html_url, description: repository.description ?? '', defaultBranch: repository.default_branch, private: repository.private, importedAt, lastSyncedAt:importedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length, indexedCommits:commits.length },
     } });
 
-    const people = Array.from(peopleByLogin.values()).map((user) => ({ login: user.login, url: user.html_url, avatar: user.avatar_url, type: user.type ?? 'User', ...(activity.get(user.login)??{pullRequestsOpened:0,issuesOpened:0,reviewsSubmitted:0,commentsWritten:0,commitsAuthored:0,lastActivityAt:''}) }));
+    const people = Array.from(peopleByLogin.values()).map((user) => ({ login: user.login, url: user.html_url, avatar: user.avatar_url, type: user.type ?? 'User' }));
     if (people.length) await graph.query('UNWIND $rows AS row MERGE (u:Contributor {login:row.login}) SET u += row', { params: { rows: people } });
 
     const workItems = [
-      ...pulls.map((item) => ({ id: String(item.id), kind: 'PR', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: item.merged_at ?? '', comments: item.comments + item.review_comments, base: item.base.ref, head: item.head.ref, additions: item.additions, deletions: item.deletions, changedFiles: item.changed_files, labels: [] as string[] })),
-      ...issues.map((item) => ({ id: String(item.id), kind: 'Issue', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: '', comments: item.comments, base: '', head: '', additions: 0, deletions: 0, changedFiles: 0, labels: item.labels.map((label) => label.name) })),
+      ...pulls.map((item) => ({ id: String(item.id), kind: 'PR', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: item.merged_at ?? '', comments: item.comments + item.review_comments, base: item.base.ref, head: item.head.ref, additions: item.additions, deletions: item.deletions, changedFiles: item.changed_files, labels: [] as string[], detailUpdatedAt:detailCursor.get(`PR:${item.number}`)??'' })),
+      ...issues.map((item) => ({ id: String(item.id), kind: 'Issue', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: '', comments: item.comments, base: '', head: '', additions: 0, deletions: 0, changedFiles: 0, labels: item.labels.map((label) => label.name),detailUpdatedAt:detailCursor.get(`Issue:${item.number}`)??'' })),
     ];
     if (workItems.length) await graph.query(`UNWIND $rows AS row
       MATCH (r:Repository {fullName:$fullName}) MERGE (item:WorkItem {id:row.id}) SET item += row
@@ -146,6 +156,15 @@ export async function POST(request: Request) {
       MERGE (person)-[authored:WROTE]->(comment) SET authored.createdAt=row.createdAt
       MERGE (comment)-[context:ON_ITEM]->(item) SET context.kind=row.kind,context.createdAt=row.createdAt`, { params: { rows: comments.map(({ comment, number, kind }) => ({ id: String(comment.id), body: (comment.body ?? '').slice(0, 3000), url: comment.html_url, createdAt: comment.created_at, updatedAt: comment.updated_at ?? comment.created_at, number, kind, login: comment.user!.login })) } });
 
+    for(const [relationship,label,kind,property] of [
+      ['OPENED','WorkItem','PR','pullRequestsOpened'],['OPENED','WorkItem','Issue','issuesOpened'],
+    ] as const){
+      await graph.query(`MATCH (person:Contributor) OPTIONAL MATCH (person)-[:${relationship}]->(item:${label} {kind:$kind}) WITH person,count(DISTINCT item) AS total SET person.${property}=total`,{params:{kind}});
+    }
+    await graph.query('MATCH (person:Contributor) OPTIONAL MATCH (person)-[:SUBMITTED]->(review:Review) WITH person,count(DISTINCT review) AS total SET person.reviewsSubmitted=total');
+    await graph.query('MATCH (person:Contributor) OPTIONAL MATCH (person)-[:WROTE]->(comment:Comment) WITH person,count(DISTINCT comment) AS total SET person.commentsWritten=total');
+    await graph.query('MATCH (person:Contributor) OPTIONAL MATCH (person)-[:AUTHORED]->(commit:Commit) WITH person,count(DISTINCT commit) AS total SET person.commitsAuthored=total');
+
     // The index is intentionally bounded. Remove items that have fallen outside the newest-updated window.
     const workItemIds = workItems.map((item) => item.id);
     await graph.query(`MATCH (r:Repository {fullName:$fullName})-[:HAS_ITEM]->(item:WorkItem)
@@ -157,9 +176,11 @@ export async function POST(request: Request) {
     await graph.query('MATCH (review:Review) WHERE NOT (review)-[:ON_PR]->() DETACH DELETE review');
     await graph.query('MATCH (comment:Comment) WHERE NOT (comment)-[:ON_ITEM]->() DETACH DELETE comment');
     await graph.query('MATCH (person:Contributor) WHERE NOT (person)--() DETACH DELETE person');
+    await graph.query('MATCH (r:Repository {fullName:$fullName}) SET r.indexedReviews=$reviews,r.indexedFiles=$files,r.indexedComments=$comments,r.indexedContributors=$contributors', { params:{fullName:repository.full_name,reviews:reviews.length,files:changedFiles.length,comments:comments.length,contributors:people.length} });
 
     const response = NextResponse.json({ status: 'complete', repository: repository.full_name, syncedAt: importedAt, latestActivityAt,
       indexWindow: { pullRequests: ITEM_WINDOW, issues: ITEM_WINDOW, detailedPullRequests: DETAIL_WINDOW, detailedIssues: DETAIL_WINDOW },
+      detailBackfillPending:pullCandidates.length>detailedPulls.length||issueCandidates.length>detailedIssues.length,
       warnings: commitResult.available ? [] : ['Commit history was unavailable. Grant Contents: read to include commit activity.'],
       pulls: pulls.map(compact), issues: issues.map(compact), graph: privateGraphName(session.id, repository.full_name),
       imported: { people: people.length, pullRequests: pulls.length, issues: issues.length, commits: commits.length, reviews: reviews.length, comments: comments.length, files: changedFiles.length },
@@ -169,6 +190,16 @@ export async function POST(request: Request) {
     return response;
   } catch (error) {
     console.error('GitHub repository sync failed:', error);
+    if (error instanceof GithubApiError && error.rateLimited) {
+      const retrySeconds = Math.max(1, Math.ceil((Date.parse(error.retryAt ?? '') - Date.now()) / 1000) || 60);
+      return NextResponse.json({
+        error: 'GitHub has temporarily limited repository reads. The last successful graph snapshot is still available; retry after the supplied time.',
+        code: 'GITHUB_RATE_LIMITED', retryAt: error.retryAt, retryAfterSeconds: retrySeconds,
+      }, { status: 429, headers: { 'Retry-After': String(retrySeconds) } });
+    }
+    if (error instanceof GithubApiError) {
+      return NextResponse.json({ error: error.message, code: 'GITHUB_API_ERROR', upstreamStatus: error.status }, { status: 502 });
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Repository import failed.' }, { status: 503 });
   }
 }

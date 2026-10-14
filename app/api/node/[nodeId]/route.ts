@@ -11,8 +11,9 @@ function unwrap(value: unknown): GraphNode {
   if ('properties' in object) return object;
   return { properties: object as Record<string, unknown> };
 }
-export async function GET(request: Request, { params }: { params: { nodeId: string } }) {
-  if (isFalkorConfigured() && /^\d+$/.test(params.nodeId)) {
+export async function GET(request: Request, { params }: { params: Promise<{ nodeId: string }> }) {
+  const { nodeId } = await params;
+  if (isFalkorConfigured() && /^\d+$/.test(nodeId)) {
     try {
       const session = await readSession();
       const repository = session?.selectedRepo ?? 'internetarchive/openlibrary';
@@ -20,7 +21,7 @@ export async function GET(request: Request, { params }: { params: { nodeId: stri
       const result = await graph.query(`MATCH (node) WHERE id(node)=$nodeId
         OPTIONAL MATCH (node)-[relationship]-(other)
         RETURN labels(node) AS labels,node AS node,type(relationship) AS relationshipType,properties(relationship) AS relationshipProperties,
-          id(other) AS otherId,labels(other) AS otherLabels,other AS other LIMIT 40`, { params: { nodeId: Number(params.nodeId) } });
+          id(other) AS otherId,labels(other) AS otherLabels,other AS other LIMIT 40`, { params: { nodeId: Number(nodeId) } });
       const rows = (result as { data?: Record<string, unknown>[] }).data ?? [];
       if (!rows.length) return NextResponse.json({ error: 'Node not found in this repository graph.' }, { status: 404 });
       const node = unwrap(rows[0].node);
@@ -30,13 +31,13 @@ export async function GET(request: Request, { params }: { params: { nodeId: stri
         const otherProperties = other.properties ?? {};
         return { id: String(row.otherId), type: String(row.relationshipType ?? ''), label: String(otherProperties.title ?? otherProperties.login ?? otherProperties.fullName ?? otherProperties.path ?? `${String((row.otherLabels as string[] | undefined)?.[0] ?? 'Node')} ${String(otherProperties.number ?? row.otherId)}`), labels: row.otherLabels ?? other.labels ?? [], properties: otherProperties, edgeProperties: row.relationshipProperties ?? {} };
       });
-      return NextResponse.json({ id: params.nodeId, type: (rows[0].labels as string[] | undefined)?.[0] ?? node.labels?.[0] ?? 'Node', label: String(properties.title ?? properties.login ?? properties.fullName ?? properties.path ?? `${params.nodeId}`), properties, relationships, graph: 'falkordb' });
+      return NextResponse.json({ id: nodeId, type: (rows[0].labels as string[] | undefined)?.[0] ?? node.labels?.[0] ?? 'Node', label: String(properties.title ?? properties.login ?? properties.fullName ?? properties.path ?? `${nodeId}`), properties, relationships, graph: 'falkordb' });
     } catch (error) {
       console.error('Node detail query failed:', error);
       return NextResponse.json({ error: 'Could not load node details from FalkorDB.' }, { status: 503 });
     }
   }
-  const node = mockNodes.find((item) => item.id === params.nodeId);
+  const node = mockNodes.find((item) => item.id === nodeId);
   if (!node) return NextResponse.json({ error: 'Node not found' }, { status: 404 });
   const relationships = mockEdges.filter((edge) => edge.source === node.id || edge.target === node.id);
   return NextResponse.json({ ...node, relationships, graph: 'mock' });
