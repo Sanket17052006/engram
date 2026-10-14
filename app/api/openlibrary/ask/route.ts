@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
+const cypher = 'MATCH (r:Repository {fullName:$repo})-[:HAS_ITEM]->(x:WorkItem) WHERE toLower(x.title) CONTAINS $term OR toLower(x.body) CONTAINS $term OR ($number > 0 AND x.number=$number) OPTIONAL MATCH (u:Contributor)-[:OPENED]->(x) OPTIONAL MATCH (x)-[:MODIFIES]->(f:File) OPTIONAL MATCH (c:Contributor)-[:SUBMITTED]->(:Review)-[:ON_PR]->(x) RETURN x.title AS title,x.kind AS kind,x.number AS number,x.url AS url,x.state AS state,x.author AS author,collect(DISTINCT u.login) AS contributors,collect(DISTINCT f.path)[0..5] AS files,collect(DISTINCT c.login)[0..5] AS reviewers LIMIT 8';
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
@@ -7,10 +8,11 @@ export async function POST(request: Request) {
   try {
     if (isFalkorConfigured()) {
       const graph = await getGraph('engram_openlibrary');
-      const term = prompt.toLowerCase().replace(/[^a-z0-9_# -]/g, ' ').trim();
-      const result = await graph.query('MATCH (r:Repository {fullName:$repo})-[:HAS_ITEM]->(x:WorkItem) WHERE toLower(x.title) CONTAINS $term OR toLower(x.body) CONTAINS $term OR toString(x.number) CONTAINS $term OPTIONAL MATCH (u:Contributor)-[:OPENED]->(x) OPTIONAL MATCH (x)-[:MODIFIES]->(f:File) OPTIONAL MATCH (c:Contributor)-[:SUBMITTED]->(:Review)-[:ON_PR]->(x) RETURN x.title AS title,x.kind AS kind,x.number AS number,x.url AS url,x.state AS state,x.author AS author,collect(DISTINCT u.login) AS contributors,collect(DISTINCT f.path)[0..5] AS files,collect(DISTINCT c.login)[0..5] AS reviewers LIMIT 8', { params: { repo: 'internetarchive/openlibrary', term } });
+      const term = prompt.toLowerCase().replace(/[^a-z0-9_# -]/g, ' ').replace(/\b(who|has|have|worked|work|on|issue|pr|knows|know|about|the|a|an|in|for|with|open|library|find|show|me|this|that)\b/g, ' ').replace(/\s+/g, ' ').trim();
+      const number = Number(prompt.match(/#?(\d{2,})/)?.[1] ?? 0);
+      const result = await graph.query(cypher, { params: { repo: 'internetarchive/openlibrary', term, number } });
       const rows = (result as { data?: Record<string, unknown>[] }).data ?? [];
-      return NextResponse.json({ source: 'falkordb', prompt, rows, cypher: 'MATCH (r:Repository)-[:HAS_ITEM]->(x:WorkItem) OPTIONAL MATCH contributor, review, file evidence RETURN matching project records and their connected context' });
+      return NextResponse.json({ source: 'falkordb', prompt, rows, cypher });
     }
     const rows = Array.isArray(body.records) ? body.records.filter((x: any) => `${x.title} ${x.author} ${x.number}`.toLowerCase().includes(prompt.toLowerCase().replace(/who|worked|on|issue|pr|knows|about/g, '').trim()) || prompt.includes(String(x.number))).slice(0, 8) : [];
     return NextResponse.json({ source: 'preview', prompt, rows, message: 'Configure FalkorDB for persisted graph queries.' });
