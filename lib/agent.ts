@@ -1,5 +1,5 @@
 export type GraphNode = { id: string; label: string; type: string; properties: Record<string, unknown> };
-export type GraphEdge = { id: string; source: string; target: string; type: string; since?: string };
+export type GraphEdge = { id: string; source: string; target: string; type: string; since?: string; properties?: Record<string, unknown> };
 export const nodes: GraphNode[] = [
   { id: 'pr-442', label: 'PR #442', type: 'PR', properties: { status: 'open', title: 'Refresh OAuth tokens safely', url: 'https://github.com/acme/api/pull/442' } },
   { id: 'maya-chen', label: 'Maya Chen', type: 'Person', properties: { role: 'Senior Engineer', expertise: ['OAuth', 'Authentication', 'API security'], reviews: 12 } },

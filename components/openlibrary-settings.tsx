@@ -1,0 +1,22 @@
+'use client';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { ArrowRight, Check, Database, Github, ShieldCheck, Sparkles } from 'lucide-react';
+
+type Status={appConfigured:boolean;databaseConfigured:boolean;connected:boolean;authenticated:boolean;user?:{login:string;avatar:string}|null;selectedRepo?:string|null};
+const agents=[
+ {name:'Reviewer Router',track:'Connected-data agent',description:'Ranks prior reviewers by overlapping changed files and review history.'},
+ {name:'Expertise Finder',track:'Graph retrieval',description:'Finds contributors from topic matches across PRs, reviews, and changed files.'},
+ {name:'Decision Trace',track:'Source trace',description:'Surfaces issue and PR discussions that may explain a technical rationale.'},
+ {name:'Project Guide',track:'Conversation router',description:'Searches repository activity and returns linked records with the Cypher query.'},
+];
+export function OpenLibrarySettings(){
+ const [status,setStatus]=useState<Status|null>(null);
+ useEffect(()=>{fetch('/api/github/status',{cache:'no-store'}).then(response=>response.json()).then(setStatus).catch(()=>setStatus(null))},[]);
+ const repository=status?.selectedRepo??'internetarchive/openlibrary';
+ return <div className="app-shell"><aside className="sidebar"><Link href="/workspace/openlibrary" className="side-logo"><span className="side-mark"><Sparkles size={17}/></span>engram<span className="brand-dot">.</span></Link><div className="side-label">PROJECT MEMORY</div><Link className="side-link" href="/workspace/openlibrary"><Database/><span>Overview</span></Link><Link className="side-link" href="/workspace/openlibrary/explore"><Sparkles/><span>Explore graph</span></Link></aside><div className="main-area"><header className="app-header"><div className="breadcrumb"><span>Project memory</span><span>/</span><strong>Settings</strong></div></header><main className="content"><div className="welcome-row"><div><h1>Workspace settings</h1><p>Review the connected repository, privacy boundary, and active graph agents.</p></div></div>
+  <div className="section-title"><h2>Connected repository</h2><Link href="/setup/github">Manage connection <ArrowRight size={12}/></Link></div><div className="panel-card convo-list"><div className="convo-row"><span className="convo-icon"><Github size={15}/></span><span><strong>{repository}</strong><small>{status?.connected?`GitHub installation connected${status.user?` as @${status.user.login}`:''}`:'Public Open Library demo graph'}</small></span><span className="answer-tag" style={{marginLeft:'auto'}}><i/>{status?.connected?'Connected':'Demo'}</span></div><div className="convo-row"><span className="convo-icon"><Database size={15}/></span><span><strong>FalkorDB</strong><small>{status?.databaseConfigured?'Local graph database configured':'Database connection unavailable'}</small></span><span className="answer-tag" style={{marginLeft:'auto'}}><i/>{status?.databaseConfigured?'Ready':'Unavailable'}</span></div></div>
+  <div className="section-title"><h2>Graph agents</h2><span>Deterministic Cypher tools · read-only</span></div><div className="panel-card convo-list">{agents.map(agent=><div className="convo-row" key={agent.name}><span className="convo-icon"><Sparkles size={15}/></span><span><strong>{agent.name}</strong><small>{agent.description}</small></span><span className="answer-tag" style={{marginLeft:'auto'}}><Check size={10}/> Active</span></div>)}</div>
+  <div className="section-title"><h2>Access & data scope</h2></div><div className="panel-card" style={{padding:22,maxWidth:840}}><div className="setup-trust"><ShieldCheck size={15}/><span>Imports are read-only and bounded to the 200 newest updated PRs and 200 newest updated issues. Reviews, comments, and changed files are detailed for up to 50 recent PRs and 50 issues. Source code contents are not copied.</span></div><p style={{fontSize:13,lineHeight:1.7,color:'#6f766e',marginTop:15}}>Each signed-in user and selected repository gets an isolated FalkorDB graph. The graph retains up to 100 recent question-and-answer episodes per repository, with evidence links and Cypher available from the answer.</p><div className="hero-actions"><Link className="button-primary" href="/setup/github">Connect or change repository <ArrowRight size={13}/></Link>{status?.authenticated&&<form action="/api/github/logout" method="post"><button className="text-link" type="submit">Sign out</button></form>}</div></div>
+ </main></div></div>
+}

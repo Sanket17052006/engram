@@ -1,2 +1,2 @@
-import { SettingsPage } from '@/components/workspace-ui';
-export default function Page(){return <SettingsPage/>}
+import { OpenLibrarySettings } from '@/components/openlibrary-settings';
+export default function Page(){return <OpenLibrarySettings/>}

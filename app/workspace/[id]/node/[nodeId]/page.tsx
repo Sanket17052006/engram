@@ -1,2 +1,2 @@
-import { NodePage } from '@/components/workspace-ui';
-export default function Page(){return <NodePage/>}
+import { OpenLibraryNodePage } from '@/components/openlibrary-node';
+export default function Page({params}:{params:{nodeId:string}}){return <OpenLibraryNodePage nodeId={params.nodeId}/>}

@@ -1,3 +1,3 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = { reactStrictMode: true, experimental: { serverComponentsExternalPackages: ["falkordb"] } };
+const nextConfig = { reactStrictMode: true, distDir: process.env.ENGRAM_BUILD_DIR || '.next', experimental: { serverComponentsExternalPackages: ["falkordb"] } };
 export default nextConfig;

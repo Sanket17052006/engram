@@ -26,3 +26,8 @@ export async function githubApi<T>(path: string, token: string): Promise<T> {
   if (!response.ok) throw new Error(`GitHub API request failed (${response.status}) for ${path}`);
   return response.json() as Promise<T>;
 }
+export async function verifyInstallation(installationId:string){
+  const jwt=await appJwt();const response=await fetch(`${API}/app/installations/${encodeURIComponent(installationId)}`,{headers:{Authorization:`Bearer ${jwt}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},cache:'no-store'});
+  if(!response.ok)throw new Error(`GitHub installation verification failed (${response.status}).`);
+  return response.json() as Promise<{account:{login:string;id:number};repository_selection:'all'|'selected'}>;
+}

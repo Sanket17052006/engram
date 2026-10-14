@@ -1,2 +1,2 @@
-import { ChatPage } from '@/components/workspace-ui';
-export default function Page(){return <ChatPage/>}
+import { ConversationPage } from '@/components/conversation-page';
+export default function Page(){return <ConversationPage/>}
