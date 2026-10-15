@@ -109,7 +109,7 @@ export async function POST(request: Request) {
       ...issueDetails.flatMap((detail) => detail.comments.map((comment) => comment.user)).filter((user): user is User => Boolean(user)),
     ];
     for (const person of knownPeople) if (person?.login) peopleByLogin.set(person.login, person);
-    const latestActivityAt = [...pulls.map((item) => item.updated_at), ...issues.map((item) => item.updated_at)].sort().at(-1) ?? null;
+    const latestActivityAt = [...pulls.map((item) => item.updated_at), ...issues.map((item) => item.updated_at), ...commits.map((item) => item.commit.author?.date).filter((date): date is string => Boolean(date))].sort().at(-1) ?? null;
 
     if(repository.full_name.toLowerCase()!==fullName.toLowerCase())return privateJson({error:'The selected repository name did not match the GitHub repository.'},{status:409});
     const importedAt = new Date().toISOString();
@@ -188,7 +188,7 @@ export async function POST(request: Request) {
       indexWindow: { pullRequests: ITEM_WINDOW, issues: ITEM_WINDOW, detailedPullRequests: DETAIL_WINDOW, detailedIssues: DETAIL_WINDOW },
       detailCoverage:{refreshedPullRequests:detailedPulls.length,refreshedIssues:detailedIssues.length,scope:'most recently updated items'},
       warnings: commitResult.available ? [] : ['Commit history was unavailable. Grant Contents: read to include commit activity.'],
-      pulls: pulls.map(compact), issues: issues.map(compact), graph: privateGraphName(session.id, repository.full_name),
+      pulls: pulls.map(compact), issues: issues.map(compact), commits:commitsToWrite, graph: privateGraphName(session.id, repository.full_name),
       imported: { people: people.length, pullRequests: pulls.length, issues: issues.length, commits: commits.length, reviews: reviews.length, comments: comments.length, files: changedFiles.length },
     });
     await setSession(response, { ...session, selectedRepo: repository.full_name }, new URL(request.url).protocol === 'https:');

@@ -5,7 +5,7 @@ import { privateGraphName, readSession } from '@/lib/github-session';
 import { answerFromGraph } from '@/lib/llm';
 
 type Row = Record<string, unknown>;
-type Intent = 'reviewer-router' | 'expertise-finder' | 'decision-trace' | 'project-guide';
+type Intent = 'reviewer-router' | 'expertise-finder' | 'decision-trace' | 'contributor-activity' | 'project-guide';
 
 const reviewerCypher = `
 MATCH (repo:Repository {fullName:$repo})-[:HAS_ITEM]->(target:WorkItem {kind:'PR',number:$number})
@@ -55,6 +55,15 @@ RETURN item.title AS title,item.kind AS kind,item.number AS number,item.state AS
        item.url AS url,item.updatedAt AS updatedAt,substring(coalesce(item.body,''),0,600) AS context,discussion
 ORDER BY item.updatedAt DESC LIMIT 8`;
 
+const contributorActivityCypher = `
+MATCH (repo:Repository {fullName:$repo})-[:HAS_COMMIT]->(commit:Commit)
+MATCH (person:Contributor)-[:AUTHORED]->(commit)
+WHERE $term = '' OR toLower(commit.message) CONTAINS $term OR toLower(person.login) CONTAINS $term
+WITH person,count(DISTINCT commit) AS commitsAuthored,max(commit.date) AS latestCommitAt,
+     collect(DISTINCT {sha:commit.sha,message:commit.message,url:commit.url,date:commit.date})[0..5] AS evidence
+RETURN person.login AS login,commitsAuthored,latestCommitAt,evidence
+ORDER BY commitsAuthored DESC,latestCommitAt DESC,login ASC LIMIT 8`;
+
 function resultRows(result: unknown): Row[] {
   if (!result || typeof result !== 'object' || !('data' in result)) return [];
   const rows = (result as { data?: unknown }).data;
@@ -62,13 +71,14 @@ function resultRows(result: unknown): Row[] {
 }
 function intentFor(prompt: string): Intent {
   if (/\b(review|reviewer|code review)\b/i.test(prompt) && /#?\d{2,}/.test(prompt)) return 'reviewer-router';
+  if (/\b(commit|commits|contribut(?:ed|or|ors|ions?)|recent(?:ly)? active)\b/i.test(prompt)) return 'contributor-activity';
   if (/\b(who knows|expert|expertise|owner|owns|specialist|help with)\b/i.test(prompt)) return 'expertise-finder';
   if (/\b(decision|decided|rationale|why did|why was|why do we)\b/i.test(prompt)) return 'decision-trace';
   return 'project-guide';
 }
 function cleanTerm(prompt: string) {
   return prompt.toLowerCase().replace(/#?\d{2,}/g, ' ').replace(/[^a-z0-9_./ -]/g, ' ')
-    .replace(/\b(who|should|could|would|can|has|have|worked|work|on|issue|pr|review|reviewer|knows|know|about|the|a|an|in|for|with|find|show|me|this|that|expert|expertise|owner|owns|specialist|help|decision|decided|rationale|why|did|was|do|we)\b/g, ' ')
+    .replace(/\b(who|should|could|would|can|has|have|worked|work|on|issue|pr|review|reviewer|knows|know|about|the|a|an|in|for|with|find|show|me|this|that|expert|expertise|owner|owns|specialist|help|decision|decided|rationale|why|did|was|do|we|contributed|contributor|contributors|contribution|contributions|commit|commits|recent|recently|active|activity)\b/g, ' ')
     .replace(/\s+/g, ' ').trim();
 }
 function makeAnswer(intent: Intent, rows: Row[], number: number, term: string) {
@@ -85,6 +95,11 @@ function makeAnswer(intent: Intent, rows: Row[], number: number, term: string) {
   if (intent === 'decision-trace') {
     if (!rows.length) return term ? `I found no discussion matching “${term}” in the imported graph. Try a related PR or issue number.` : 'No decision-related discussion was found in this imported activity window.';
     return `I found ${rows.length} repository record(s) with matching discussion. These are source discussions that may explain the rationale; Engram does not treat a merged PR alone as an approved architecture decision.`;
+  }
+  if (intent === 'contributor-activity') {
+    if (!rows.length) return 'No contributor-to-commit activity was found in the imported graph. Refresh the repository or check that commit history access is enabled.';
+    const active = rows.slice(0, 3).map(row => `${String(row.login)} (${String(row.commitsAuthored)} imported commits)`).join(', ');
+    return `In the imported commit window, the most active matched contributors are ${active}. This reflects recent commit history, not a complete measure of expertise or contribution.`;
   }
   if (!rows.length) return 'No matching pull request or issue was found in the imported activity window. Try a PR or issue number, contributor, topic, or filename.';
   const contributors = Array.from(new Set(rows.flatMap(row => [row.author, ...(Array.isArray(row.contributors) ? row.contributors : [])]).filter(Boolean)));
@@ -107,8 +122,8 @@ export async function POST(request: Request) {
 
   try {
     const graph = await getGraph(privateGraphName(session.id, repository));
-    const cypher = intent === 'reviewer-router' ? reviewerCypher : intent === 'expertise-finder' ? expertiseCypher : intent === 'decision-trace' ? decisionCypher : searchCypher;
-    const params = intent === 'reviewer-router' ? { repo: repository, number } : intent === 'expertise-finder' || intent === 'decision-trace' ? { repo: repository, term } : { repo: repository, term, number };
+    const cypher = intent === 'reviewer-router' ? reviewerCypher : intent === 'expertise-finder' ? expertiseCypher : intent === 'decision-trace' ? decisionCypher : intent === 'contributor-activity' ? contributorActivityCypher : searchCypher;
+    const params = intent === 'reviewer-router' ? { repo: repository, number } : intent === 'expertise-finder' || intent === 'decision-trace' || intent === 'contributor-activity' ? { repo: repository, term } : { repo: repository, term, number };
     const rows = resultRows(await graph.query(cypher, { params }));
 
     let memories: Row[] = [];
@@ -131,6 +146,8 @@ export async function POST(request: Request) {
           { title: `PR #${String(row.number ?? number)} · ${String(row.targetTitle ?? '')}`, url: String(row.targetUrl ?? ''), role: 'Target pull request' },
           ...(Array.isArray(row.evidence) ? row.evidence as Row[] : []).map(item => ({ title: `PR #${String(item.number ?? '')} · ${String(item.title ?? '')}`, url: String(item.url ?? ''), role: 'Related review history' })),
         ]).filter(source => source.url)
+      : intent === 'contributor-activity'
+        ? rows.flatMap(row => (Array.isArray(row.evidence) ? row.evidence as Row[] : []).map(item => ({ title: `${String(row.login)} · ${String(item.message ?? 'Commit')}`, url: String(item.url ?? ''), role: `Commit · ${String(item.date ?? '')}` }))).filter(source => source.url)
       : rows.flatMap(row => [
         { title: `#${String(row.number ?? '')} · ${String(row.title ?? row.login ?? 'Contributor')}`, url: String(row.url ?? ''), role: String(row.kind ?? 'Contributor evidence') },
         ...(Array.isArray(row.discussion) ? row.discussion as Row[] : []).map(item => ({ title: 'Related discussion', url: String(item.url ?? ''), role: 'Source comment' })),
@@ -138,7 +155,7 @@ export async function POST(request: Request) {
     const generatedAnswer = await answerFromGraph({ prompt, repository, intent, rows, sources, memories: relevantMemories });
     const answerMode = generatedAnswer ? 'openai' : 'graph-template';
     if (generatedAnswer) answer = generatedAnswer;
-    const agentName = intent === 'reviewer-router' ? 'Reviewer Router' : intent === 'expertise-finder' ? 'Expertise Finder' : intent === 'decision-trace' ? 'Decision Trace' : 'Project Guide';
+    const agentName = intent === 'reviewer-router' ? 'Reviewer Router' : intent === 'expertise-finder' ? 'Expertise Finder' : intent === 'decision-trace' ? 'Decision Trace' : intent === 'contributor-activity' ? 'Contributor Activity' : 'Project Guide';
     const createdAt = new Date().toISOString();
     const episodeId = randomUUID();
     {
