@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Activity, ArrowRight, BookOpen, Database, GitCommit, GitPullRequest, Github, LoaderCircle, MessageSquareText, Search, Send, ShieldCheck } from 'lucide-react';
+import { Activity, ArrowRight, BookOpen, Database, GitCommit, GitPullRequest, Github, LoaderCircle, MessageSquareText, Search, Send, ShieldCheck, X } from 'lucide-react';
 
 type Item = { number: number; title: string; state: string; url: string; author: string; comments: number; updated_at:string };
 type Commit = {sha:string;message:string;url:string;authorLogin:string;authorName:string;date:string};
@@ -9,6 +9,12 @@ type ActivityItem = {kind:'Pull request'|'Issue'|'Commit';number:number;title:st
 type Source = { id?: number; title: string; url: string; role: string };
 type ReviewerMatch = { login?: string; sharedFiles?: number; relatedReviews?: number; matchingFiles?: string[] };
 type Project = { repository: string; pulls: Item[]; issues: Item[]; commits:Commit[]; graph: string; syncedAt?: string; latestActivityAt?: string | null; stale?:boolean; counts: { pullRequests: number; issues: number; reviews: number; files: number; commits:number; contributors:number } };
+type AvailableRepo = { id:number; full_name:string; description:string|null; private:boolean; language:string|null; default_branch:string };
+type SyncResponse = { repository:string; pulls:Item[]; issues:Item[]; commits:Commit[]; syncedAt:string; latestActivityAt:string|null; imported:Record<string,number> };
+
+function projectFromSync(result:SyncResponse):Project {
+  return {repository:result.repository,pulls:result.pulls??[],issues:result.issues??[],commits:result.commits??[],graph:'falkordb',syncedAt:result.syncedAt,latestActivityAt:result.latestActivityAt,counts:{pullRequests:result.imported?.pullRequests??0,issues:result.imported?.issues??0,reviews:result.imported?.reviews??0,files:result.imported?.files??0,commits:result.imported?.commits??0,contributors:result.imported?.people??0}};
+}
 
 export function RepositoryWorkspace() {
   const [data, setData] = useState<Project | null>(null);
@@ -27,6 +33,11 @@ export function RepositoryWorkspace() {
   const [selectedRepo,setSelectedRepo]=useState('');
   const [signedIn,setSignedIn]=useState('');
   const [briefPr,setBriefPr]=useState('');
+  const [repoSwitcherOpen,setRepoSwitcherOpen]=useState(false);
+  const [availableRepos,setAvailableRepos]=useState<AvailableRepo[]>([]);
+  const [repoSearch,setRepoSearch]=useState('');
+  const [reposLoading,setReposLoading]=useState(false);
+  const [switchingRepo,setSwitchingRepo]=useState('');
 
   async function readCache(repo=selectedRepo){
     if(!repo)return false;
@@ -42,7 +53,7 @@ export function RepositoryWorkspace() {
       if(!repo)throw new Error('Select a repository in setup before importing activity.');
       const response=await fetch('/api/github/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repository:repo}),cache:'no-store'});
       const result=await response.json();if(!response.ok)throw Object.assign(new Error(result.error??'Repository refresh failed.'),{code:result.code,retryAt:result.retryAt});
-      setData(repo?{repository:result.repository,pulls:result.pulls,issues:result.issues,commits:result.commits??[],graph:'falkordb',syncedAt:result.syncedAt,latestActivityAt:result.latestActivityAt,counts:{pullRequests:result.imported.pullRequests,issues:result.imported.issues,reviews:result.imported.reviews,files:result.imported.files,commits:result.imported.commits,contributors:result.imported.people}}:result);
+      setData(repo?projectFromSync(result as SyncResponse):result);
     } catch(e) {
       const failure=e as Error&{retryAt?:string};
       const reason=`${failure.message??'Could not refresh the repository.'}${failure.retryAt?` Retry after ${new Date(failure.retryAt).toLocaleString()}.`:''}`;
@@ -65,6 +76,26 @@ export function RepositoryWorkspace() {
     finally { setBusy(false); }
   }
 
+  async function openRepoSwitcher(){
+    setRepoSwitcherOpen(true);setRepoSearch('');
+    setReposLoading(true);
+    try{const response=await fetch('/api/github/repos',{cache:'no-store'});const result=await response.json();if(!response.ok)throw new Error(result.error??'Could not load repositories.');setAvailableRepos(result.repositories??[])}
+    catch(e){setError(e instanceof Error?e.message:'Could not load repositories.');setRepoSwitcherOpen(false)}
+    finally{setReposLoading(false)}
+  }
+
+  async function switchRepository(repo:AvailableRepo){
+    if(repo.full_name===(data?.repository??selectedRepo)){setRepoSwitcherOpen(false);return}
+    setSwitchingRepo(repo.full_name);setBusy(true);setError('');
+    try{
+      const response=await fetch('/api/github/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repository:repo.full_name}),cache:'no-store'});
+      const result=await response.json();if(!response.ok)throw new Error(result.error??'Repository import failed.');
+      const project=projectFromSync(result as SyncResponse);
+      setData(project);setSelectedRepo(project.repository);setBriefPr('');setPrompt('');setAnswer('');setEvidence([]);setSources([]);setCypher('');setQuerySource('');setAnswerMode('');setEvidenceCounts({recordCount:0,sourceCount:0});setAgent('');setMemoryCount(0);setRepoSwitcherOpen(false);
+    }catch(e){setError(e instanceof Error?e.message:'Could not switch repository.');setRepoSwitcherOpen(false)}
+    finally{setBusy(false);setSwitchingRepo('')}
+  }
+
   const activity:ActivityItem[] = data ? [
     ...data.pulls.map(item=>({...item,kind:'Pull request' as const})),
     ...data.issues.map(item=>({...item,kind:'Issue' as const})),
@@ -73,6 +104,7 @@ export function RepositoryWorkspace() {
   const repository = data?.repository ?? selectedRepo;
   const repositoryName = repository?.split('/').pop() || 'Repository';
   const repositoryUrl = repository ? `https://github.com/${repository}` : 'https://github.com';
+  const filteredRepos = availableRepos.filter(repo=>`${repo.full_name} ${repo.description??''}`.toLowerCase().includes(repoSearch.toLowerCase()));
   const graphPreviewNodes = data ? [
     {label:repositoryName,kind:'Repository',x:55,y:55},
     ...(data.counts.contributors?[{label:`${data.counts.contributors} contributors`,kind:'Contributor',x:170,y:92}]:[]),
@@ -98,7 +130,7 @@ export function RepositoryWorkspace() {
       <Link href="/setup/github" className="side-link"><Github/><span>Connect another repo</span></Link>
     </aside>
     <div className="main-area">
-      <header className="app-header"><div className="breadcrumb"><span>Project memory</span><span>/</span><strong>{repository}</strong></div><div className="header-tools"><span className="answer-tag"><i/> {signedIn?`Connected as ${signedIn}`:'Repository'}</span>{signedIn&&<form action="/api/github/logout" method="post"><button className="text-link" type="submit">Sign out</button></form>}</div></header>
+      <header className="app-header"><div className="breadcrumb"><span>Project memory</span><span>/</span><strong>{repository}</strong></div><div className="header-tools">{signedIn&&<button className="text-link repo-switch-trigger" onClick={()=>void openRepoSwitcher()} disabled={busy}>Switch repository <ArrowRight size={12}/></button>}<span className="answer-tag"><i/> {signedIn?`Connected as ${signedIn}`:'Repository'}</span>{signedIn&&<form action="/api/github/logout" method="post"><button className="text-link" type="submit">Sign out</button></form>}</div></header>
       <main className="content ol-content" id="overview">
         <div className="ol-hero"><div><div className="eyebrow"><span className="pulse"/> CONTRIBUTOR KNOWLEDGE GRAPH</div><h1>Understand the work<br/>behind <em>{repositoryName}.</em></h1><p>Explore real pull requests and issues, trace contributor activity, and find context before you contribute.</p><div className="hero-actions"><button className="button-primary" onClick={()=>load(selectedRepo)} disabled={busy}>{busy?<LoaderCircle className="spin" size={16}/>:<Database size={16}/>} {data?'Refresh project data':'Load live project data'} <ArrowRight size={15}/></button><a href={repositoryUrl} target="_blank" rel="noreferrer" className="text-link">View repository <Github size={14}/></a></div></div><div className="ol-graph-card"><div className="pane-label">{data?'IMPORTED GRAPH DATA':'GRAPH STRUCTURE'}</div><svg viewBox="0 0 360 210"><g className="ol-links">{graphPreviewNodes.slice(1).map(node=><path key={node.kind} d={`M${graphPreviewNodes[0].x} ${graphPreviewNodes[0].y} ${node.x} ${node.y}`}/>)}</g>{graphPreviewNodes.map(node=><g key={node.kind}><circle cx={node.x} cy={node.y} r="9"/><text x={node.x} y={node.y+26}>{node.label}</text></g>)}</svg><small>{data?`${data.counts.contributors} contributors · ${data.counts.commits} commits · ${data.counts.pullRequests} pull requests`:'People · commits · pull requests · issues'}</small></div></div>
         {error&&<div className="setup-alert">{error}</div>}
@@ -108,5 +140,6 @@ export function RepositoryWorkspace() {
         <footer className="ol-footer"><span>Repository activity from GitHub: {repository}.</span><span>FalkorDB stores connected project context.</span></footer>
       </main>
     </div>
+    {repoSwitcherOpen&&<div className="repo-switch-overlay" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setRepoSwitcherOpen(false)}><section className="repo-switch-dialog" role="dialog" aria-modal="true" aria-labelledby="repo-switch-title"><header><div><span className="pane-label">YOUR GITHUB INSTALLATION</span><h2 id="repo-switch-title">Choose a repository</h2><p>Each repository gets its own private graph and memory.</p></div><button className="close-btn" onClick={()=>setRepoSwitcherOpen(false)} aria-label="Close repository switcher"><X size={16}/></button></header><label className="repo-switch-search"><Search size={15}/><input autoFocus value={repoSearch} onChange={event=>setRepoSearch(event.target.value)} placeholder="Search repositories you can access"/></label><div className="repo-switch-list">{reposLoading?<div className="repo-switch-empty"><LoaderCircle className="spin" size={18}/> Loading repositories from GitHub…</div>:filteredRepos.length?filteredRepos.map(repo=><button className={`repo-switch-option ${repo.full_name===repository?'current':''}`} key={repo.id} onClick={()=>void switchRepository(repo)} disabled={Boolean(switchingRepo)}><span className="repo-switch-avatar">{repo.full_name.split('/').at(-1)?.slice(0,2).toUpperCase()}</span><span className="repo-switch-copy"><strong>{repo.full_name}</strong><small>{repo.description||`${repo.language??'Repository'} · ${repo.default_branch}`}</small></span><span className="repo-switch-state">{switchingRepo===repo.full_name?<><LoaderCircle className="spin" size={14}/> Importing</>:repo.full_name===repository?'Current':repo.private?'Private':'Public'}</span></button>):<div className="repo-switch-empty">{availableRepos.length?'No repository matches that search.':'No repositories are available to this GitHub App installation yet.'}<Link href="/setup/github">Manage GitHub access <ArrowRight size={12}/></Link></div>}</div><footer><ShieldCheck size={14}/> Only repositories granted to this Engram installation appear here.</footer></section></div>}
   </div>;
 }

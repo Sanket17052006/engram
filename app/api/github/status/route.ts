@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/github-session';
 import { getLlmConfiguration } from '@/lib/llm';
+import { privateJson } from '@/lib/private-response';
 
 export async function GET() {
   const session = await readSession();
   const llm = getLlmConfiguration();
-  return NextResponse.json({
+  return privateJson({
     appConfigured: Boolean(process.env.GITHUB_APP_SLUG && process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY && process.env.GITHUB_APP_CLIENT_ID && process.env.GITHUB_APP_CLIENT_SECRET),
     databaseConfigured: Boolean(process.env.FALKORDB_URL),
     llmConfigured: llm.configured,

@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
+import { privateJson } from '@/lib/private-response';
 import { privateGraphName, readSession } from '@/lib/github-session';
 export async function GET(request: Request) {
   const session=await readSession();
-  if(!session)return NextResponse.json({error:'Sign in with GitHub and select a repository first.'},{status:401});
-  if(!session.selectedRepo)return NextResponse.json({error:'Select a repository before exploring a graph.'},{status:409});
-  if (!isFalkorConfigured()) return NextResponse.json({error:'FalkorDB is not configured.'},{status:503});
+  if(!session)return privateJson({error:'Sign in with GitHub and select a repository first.'},{status:401});
+  if(!session.selectedRepo)return privateJson({error:'Select a repository before exploring a graph.'},{status:409});
+  if (!isFalkorConfigured()) return privateJson({error:'FalkorDB is not configured.'},{status:503});
   {
     try {
       const graph=await getGraph(privateGraphName(session.id,session.selectedRepo));
@@ -20,7 +20,14 @@ export async function GET(request: Request) {
         const targetLabels = (row.targetLabels as string[] | undefined) ?? targetNode?.labels ?? [];
         const sourceProps = sourceNode?.properties ?? row.source as Record<string, unknown>;
         const targetProps = targetNode?.properties ?? row.target as Record<string, unknown>;
-        const label = (props:Record<string,unknown>,labels:string[],id:string) => String(props.title ?? props.login ?? props.fullName ?? `${labels[0] ?? 'Node'} ${props.number ?? id}`);
+        const label = (props:Record<string,unknown>,labels:string[],id:string) => {
+          const type = labels[0] ?? 'Node';
+          const content = type === 'Commit' ? String(props.message ?? '')
+            : type === 'Comment' ? String(props.body ?? '')
+            : type === 'Review' ? `${String(props.state ?? 'Review')} review`
+            : '';
+          return String(props.title ?? props.login ?? props.fullName ?? props.path ?? (content ? content.split('\n')[0].slice(0, 58) : `${type} ${props.number ?? id}`));
+        };
         if (!mappedNodes.has(a)) mappedNodes.set(a, { id:a,label:label(sourceProps,sourceLabels,a),type:sourceLabels?.[0] ?? 'Node',properties:sourceProps });
         if (!mappedNodes.has(b)) mappedNodes.set(b, { id:b,label:label(targetProps,targetLabels,b),type:targetLabels?.[0] ?? 'Node',properties:targetProps });
         const relation=String(row.relation);
@@ -44,10 +51,10 @@ export async function GET(request: Request) {
                       : {};
         return { id:`edge-${index}`,source:a,target:b,type:relation,properties:Object.keys(storedRelationProps).length?storedRelationProps:inferredRelationProps };
       });
-      return NextResponse.json({ nodes:Array.from(mappedNodes.values()),edges:mappedEdges,meta:{source:'falkordb',repository:session.selectedRepo} });
+      return privateJson({ nodes:Array.from(mappedNodes.values()),edges:mappedEdges,meta:{source:'falkordb',repository:session.selectedRepo} });
     } catch (error) {
       console.error('FalkorDB graph exploration failed:', error);
-      return NextResponse.json({ error:'FalkorDB graph exploration failed.' }, { status:503 });
+      return privateJson({ error:'FalkorDB graph exploration failed.' }, { status:503 });
     }
   }
 }

@@ -8,6 +8,11 @@ async function getJson(path, init) {
   return { response, data };
 }
 
+test('GitHub setup is available to a first-time visitor', async () => {
+  const response = await fetch(new URL('/setup/github', baseUrl), { cache: 'no-store' });
+  assert.equal(response.status, 200);
+});
+
 test('GitHub status reports configured services without exposing credentials', async () => {
   const { response, data } = await getJson('/api/github/status', { cache: 'no-store' });
   assert.equal(response.status, 200);
@@ -17,6 +22,7 @@ test('GitHub status reports configured services without exposing credentials', a
   assert.equal(typeof data.llmConfigured, 'boolean');
   assert.equal('token' in data, false);
   assert.equal('clientSecret' in data, false);
+  assert.match(response.headers.get('cache-control') ?? '', /private, no-store/);
 });
 
 test('GitHub OAuth start uses state and PKCE with the configured callback', async () => {
@@ -35,6 +41,7 @@ test('GitHub OAuth start uses state and PKCE with the configured callback', asyn
 test('repository endpoints require an authenticated GitHub session', async () => {
   const repos = await fetch(new URL('/api/github/repos', baseUrl));
   assert.equal(repos.status, 401);
+  assert.match(repos.headers.get('cache-control') ?? '', /private, no-store/);
   const privateSnapshot = await fetch(new URL('/api/github/sync', baseUrl));
   assert.equal(privateSnapshot.status, 401);
   assert.match(privateSnapshot.headers.get('cache-control') ?? '', /private, no-store/);
@@ -50,6 +57,7 @@ test('chat validates input and requires a selected GitHub repository', async () 
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '   ' }),
   });
   assert.equal(empty.status, 400);
+  assert.match(empty.headers.get('cache-control') ?? '', /private, no-store/);
   const { response, data } = await getJson('/api/chat', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Who should review PR #442?' }),
   });
@@ -60,6 +68,8 @@ test('chat validates input and requires a selected GitHub repository', async () 
 test('graph and node APIs require an authenticated selected repository', async () => {
   const graph = await fetch(new URL('/api/graph/explore', baseUrl), { cache: 'no-store' });
   assert.equal(graph.status, 401);
+  assert.match(graph.headers.get('cache-control') ?? '', /private, no-store/);
   const node = await fetch(new URL('/api/node/1', baseUrl), { cache: 'no-store' });
   assert.equal(node.status, 401);
+  assert.match(node.headers.get('cache-control') ?? '', /private, no-store/);
 });

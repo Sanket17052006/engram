@@ -13,7 +13,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. Sign in with GitHub, install the read-only app for repositories you choose, and select one repository to create your workspace. Any repository available to that installation can be selected; OpenLibrary is only one possible personal demo target. To connect a repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, and a random `SESSION_SECRET` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
+Open `http://localhost:3000`. A first-time user signs in with GitHub, installs Engram on their account, and selects one of the repositories granted to that installation. Engram is repository-agnostic: it only imports the repository the user selects, and each user's selected repository is stored in a separate private graph. To allow users outside the app owner's account, set the GitHub App installation target to **Any account**. To connect a repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, and a random `SESSION_SECRET` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
 
 ## Free self-hosted deployment
 
@@ -54,7 +54,7 @@ Edges encode repository membership, authorship, opened work, submitted reviews, 
 
 ## Agents and track coverage
 
-- **Track 01 · Agents That Act on Connected Data:** Reviewer Router follows a target PR’s changed files to previous PRs, then through their reviews to contributors. It ranks matches by shared files and related reviews, returns evidence links, and shows the parameterized Cypher. The decision is recorded as a private graph episode and handed to the selected specialist. Reviewer ranking requires a repository import with PR, review, and file history; the current `Sanket17052006/openlibrary` demo fork contains commits but no imported PR/review history, so it cannot demonstrate a non-empty reviewer ranking until a history-rich repo is selected.
+- **Track 01 · Agents That Act on Connected Data:** Reviewer Router follows a target PR’s changed files to previous PRs, then through their reviews to contributors. It ranks matches by shared files and related reviews, returns evidence links, and shows the parameterized Cypher. The decision is recorded as a private graph episode and handed to the selected specialist. Reviewer ranking needs PR, review, and file history; if the selected repository has no such history in its import window, Engram explains the evidence gap instead of inventing a recommendation.
 - **Track 02 · Agent Memory and Coordination:** Context Retriever hands evidence to Reviewer Router, Expertise Finder, Decision Trace, or Project Guide. Question/answer episodes, agent identity, evidence count, timestamp, and handoff are persisted in each user's private repository graph; follow-up questions can retrieve prior episodes. The graph keeps the latest 100 episodes per user/repository.
 - **Track 03 · Company Brain:** the graph joins contributors, PRs, issues, comments, reviews, changed files, commits, and decisions/discussions when present. Expertise results are based on observed review activity. Decision Trace surfaces matching source discussions; it does not claim that every merged PR is a formally approved decision. Answers include source links and the Cypher query. Import freshness is bounded by the configured recent windows and GitHub rate limits.
 

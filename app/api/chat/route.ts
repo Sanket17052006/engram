@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { NextResponse } from 'next/server';
 import { getGraph, isFalkorConfigured } from '@/lib/falkordb';
 import { privateGraphName, readSession } from '@/lib/github-session';
 import { answerFromGraph, getLlmConfiguration } from '@/lib/llm';
+import { privateJson } from '@/lib/private-response';
 
 type Row = Record<string, unknown>;
 type Intent = 'reviewer-router' | 'expertise-finder' | 'decision-trace' | 'contributor-activity' | 'project-guide';
@@ -109,16 +109,16 @@ function makeAnswer(intent: Intent, rows: Row[], number: number, term: string) {
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 500) : '';
-  if (!prompt) return NextResponse.json({ error: 'Ask a question about the connected repository.' }, { status: 400 });
+  if (!prompt) return privateJson({ error: 'Ask a question about the connected repository.' }, { status: 400 });
   const session = await readSession();
-  if (!session) return NextResponse.json({ error: 'Sign in with GitHub and select a repository first.' }, { status: 401 });
-  if (!session.selectedRepo) return NextResponse.json({ error: 'Select a repository before asking a question.' }, { status: 409 });
+  if (!session) return privateJson({ error: 'Sign in with GitHub and select a repository first.' }, { status: 401 });
+  if (!session.selectedRepo) return privateJson({ error: 'Select a repository before asking a question.' }, { status: 409 });
   const repository = session.selectedRepo;
   const intent = intentFor(prompt);
   const term = cleanTerm(prompt);
   const number = Number(prompt.match(/#?(\d{2,})/)?.[1] ?? 0);
-  if (intent === 'decision-trace' && !term) return NextResponse.json({ error: 'Add a topic or repository term to trace the related discussion.' }, { status: 400 });
-  if (!isFalkorConfigured()) return NextResponse.json({ error: 'Graph-backed answers need FalkorDB. Start the local Docker service and try again.' }, { status: 503 });
+  if (intent === 'decision-trace' && !term) return privateJson({ error: 'Add a topic or repository term to trace the related discussion.' }, { status: 400 });
+  if (!isFalkorConfigured()) return privateJson({ error: 'Graph-backed answers need FalkorDB. Start the local Docker service and try again.' }, { status: 503 });
 
   try {
     const graph = await getGraph(privateGraphName(session.id, repository));
@@ -180,9 +180,9 @@ export async function POST(request: Request) {
         WHERE episode.userId=$userId WITH episode ORDER BY episode.createdAt DESC SKIP 100 DETACH DELETE episode`, { params: { repo: repository, userId: String(session.id) } });
     }
     const llm = getLlmConfiguration();
-    return NextResponse.json({ source: 'falkordb', repository, prompt, intent, answer, answerMode, llmConfigured: llm.configured, llmProvider: llm.provider, llmModel: llm.model, evidence: { recordCount: rows.length, sourceCount: identifiedSources.length }, rows, sources: identifiedSources, cypher, params, memory: { used: relevantMemories.length > 0, count: relevantMemories.length, recent: relevantMemories }, handoff: { from: 'Context Retriever', to: agentName }, episodeId });
+    return privateJson({ source: 'falkordb', repository, prompt, intent, answer, answerMode, llmConfigured: llm.configured, llmProvider: llm.provider, llmModel: llm.model, evidence: { recordCount: rows.length, sourceCount: identifiedSources.length }, rows, sources: identifiedSources, cypher, params, memory: { used: relevantMemories.length > 0, count: relevantMemories.length, recent: relevantMemories }, handoff: { from: 'Context Retriever', to: agentName }, episodeId });
   } catch (error) {
     console.error('Graph-backed question failed:', error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'FalkorDB query failed.' }, { status: 503 });
+    return privateJson({ error: error instanceof Error ? error.message : 'FalkorDB query failed.' }, { status: 503 });
   }
 }

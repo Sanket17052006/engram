@@ -1,0 +1,23 @@
+.repo-switch-trigger{display:inline-flex;align-items:center;gap:7px;border:1px solid #e1e4dc;background:#fff;border-radius:5px;padding:8px 11px;white-space:nowrap}
+.repo-switch-overlay{position:fixed;inset:0;z-index:1000;background:#171b18a8;backdrop-filter:blur(5px);display:grid;place-items:center;padding:24px}
+.repo-switch-dialog{width:min(620px,100%);max-height:min(760px,90vh);display:flex;flex-direction:column;background:#fbfbf8;border:1px solid #e4e6df;border-radius:12px;box-shadow:0 28px 90px #1117;overflow:hidden}
+.repo-switch-dialog>header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:25px 26px 18px;border-bottom:1px solid #e9ebe5}
+.repo-switch-dialog h2{margin:7px 0 5px;font-size:24px;letter-spacing:-.7px}
+.repo-switch-dialog header p{margin:0;color:#727a71;font-size:13px}
+.repo-switch-search{margin:18px 22px 10px;display:flex;align-items:center;gap:10px;border:1px solid #e2e5dd;border-radius:7px;background:#fff;padding:0 13px;color:#8d958b}
+.repo-switch-search input{flex:1;min-width:0;height:43px;border:0;outline:0;background:transparent;font:inherit;font-size:13px;color:#303831}
+.repo-switch-list{overflow:auto;padding:4px 14px 14px}
+.repo-switch-option{width:100%;display:flex;align-items:center;gap:12px;padding:12px;border:1px solid transparent;border-radius:8px;background:transparent;color:#333a34;text-align:left;cursor:pointer}
+.repo-switch-option:hover,.repo-switch-option.current{background:#f0f1eb;border-color:#e3e6dd}
+.repo-switch-option:disabled{cursor:wait;opacity:.65}
+.repo-switch-avatar{width:35px;height:35px;flex:0 0 35px;border-radius:9px;background:#ece8dc;color:#8f683d;display:grid;place-items:center;font-size:11px;font-weight:700}
+.repo-switch-copy{flex:1;min-width:0}
+.repo-switch-copy strong,.repo-switch-copy small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo-switch-copy strong{font-size:13px}
+.repo-switch-copy small{margin-top:4px;color:#899087;font-size:11px}
+.repo-switch-state{display:flex;align-items:center;gap:5px;color:#798174;font-size:10px;white-space:nowrap}
+.repo-switch-option.current .repo-switch-state{color:#64835f}
+.repo-switch-empty{min-height:110px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:10px;color:#828a80;font-size:12px;text-align:center;padding:20px}
+.repo-switch-empty a{display:inline-flex;align-items:center;gap:6px;color:#434e43;font-weight:600}
+.repo-switch-dialog>footer{display:flex;align-items:center;gap:8px;padding:13px 24px;border-top:1px solid #e9ebe5;color:#737c70;font-size:11px}
+@media(max-width:680px){.repo-switch-overlay{padding:12px}.repo-switch-dialog>header{padding:20px 18px 15px}.repo-switch-dialog h2{font-size:21px}.repo-switch-search{margin:14px 14px 8px}.repo-switch-list{padding:4px 8px 12px}.repo-switch-option{gap:9px;padding:10px 8px}.repo-switch-state{font-size:9px}.repo-switch-trigger{padding:7px 8px;font-size:11px}.repo-switch-dialog>footer{padding:12px 15px}}
