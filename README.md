@@ -156,7 +156,7 @@ npm ci
 npm run dev
 ```
 
-Open [http://localhost:3100](http://localhost:3100). Use `/demo` to import a public repository without signing in, or connect GitHub to select a repository and use personal project memory. Optional local service views are available at [FalkorDB Browser](http://localhost:3001) and [FastAPI health](http://localhost:8000/health).
+Open [http://localhost:3100](http://localhost:3100). Use `/demo` to import a public repository without signing in, or connect GitHub to select a repository and use personal project memory. Optional local service views are available at [FalkorDB Browser](http://localhost:3002) and [FastAPI health](http://localhost:8000/health).
 
 ## Verification
 
