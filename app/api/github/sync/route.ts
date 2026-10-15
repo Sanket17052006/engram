@@ -13,6 +13,13 @@ const privateJson = (body: unknown, init?: ResponseInit) => {
   response.headers.set('Cache-Control', 'private, no-store, max-age=0');
   return response;
 };
+function cleanGraphParams(value:unknown):unknown {
+  if(typeof value==='string')return value.replace(/[\r\n\t]+/g,' ').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'');
+  if(typeof value==='number'&&!Number.isFinite(value))return null;
+  if(Array.isArray(value))return value.map(cleanGraphParams);
+  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).filter(([,entry])=>entry!==undefined).map(([key,entry])=>[key,cleanGraphParams(entry)]));
+  return value;
+}
 
 type User = { id: number; login: string; html_url: string; avatar_url: string; type?: string };
 type Pull = { id: number; number: number; title: string; body: string | null; state: string; user: User; assignees?:User[]; requested_reviewers?:User[]; labels?:{name:string}[]; html_url: string; created_at: string; updated_at: string; closed_at: string | null; merged_at: string | null; additions: number; deletions: number; changed_files: number; base: { ref: string }; head: { ref: string }; comments: number; review_comments: number };
@@ -66,7 +73,14 @@ export async function POST(request: Request) {
 
   try {
     const graphName=privateGraphName(session.id,fullName);
-    const graph=await getGraph(graphName);
+    const rawGraph=await getGraph(graphName);
+    // GitHub omits optional fields inconsistently and text often contains line
+    // breaks. FalkorDB's parameter encoder rejects undefined nested fields and
+    // raw control characters, so normalize them at the graph-write boundary.
+    const graph={query:async(statement:string,options?:{params?:Record<string,unknown>})=>{
+      try{return await rawGraph.query(statement,options?.params?{...options,params:cleanGraphParams(options.params) as Record<string,unknown>}:options)}
+      catch(error){console.error('FalkorDB sync query failed:',statement,error);throw error}
+    }};
     const token = await installationToken(session.installationId);
     const prefix = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}`;
     const repository = await githubApi<Repo>(prefix, token);
@@ -164,10 +178,7 @@ export async function POST(request: Request) {
 
     if(repository.full_name.toLowerCase()!==fullName.toLowerCase())return privateJson({error:'The selected repository name did not match the GitHub repository.'},{status:409});
     const importedAt = new Date().toISOString();
-    await graph.query('MERGE (r:Repository {fullName:$fullName}) SET r += $properties', { params: {
-      fullName: repository.full_name,
-      properties: { fullName: repository.full_name, name: repository.name, url: repository.html_url, description: repository.description ?? '', defaultBranch: repository.default_branch, private: repository.private, upstreamRepository:sourceRepository!==repository.full_name?sourceRepository:'', importedAt, lastSyncedAt:importedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length, indexedCommits:commits.length,indexedBranches:activeBranches.length },
-    } });
+    await graph.query('MERGE (r:Repository {fullName:$fullName}) RETURN r.fullName AS fullName',{params:{fullName:repository.full_name}});
 
     const people = Array.from(peopleByLogin.values()).map((user) => ({ login: user.login, url: user.html_url, avatar: user.avatar_url, type: user.type ?? 'User' }));
     if (people.length) await graph.query('UNWIND $rows AS row MERGE (u:Contributor {login:row.login}) SET u += row', { params: { rows: people } });
@@ -176,11 +187,15 @@ export async function POST(request: Request) {
       ...pulls.map((item) => ({ id: String(item.id), sourceRepository, kind: 'PR', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', assigneeLogins:(item.assignees??[]).map(user=>user.login),requestedReviewerLogins:(item.requested_reviewers??[]).map(user=>user.login), linkedIssueNumbers:Array.from((item.body??'').matchAll(/\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)\b/gi),match=>Number(match[1])), createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: item.merged_at ?? '', comments: item.comments + item.review_comments, base: item.base.ref, head: item.head.ref, additions: item.additions, deletions: item.deletions, changedFiles: item.changed_files, labels: (item.labels??[]).map(label=>label.name), detailUpdatedAt:detailCursor.get(`${sourceRepository}:PR:${item.number}`)??'' })),
       ...issues.map((item) => ({ id: String(item.id), sourceRepository, kind: 'Issue', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', assigneeLogins:(item.assignees??[]).map(user=>user.login),requestedReviewerLogins:[],linkedIssueNumbers:[] as number[], createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: '', comments: item.comments, base: '', head: '', additions: 0, deletions: 0, changedFiles: 0, labels: item.labels.map((label) => label.name),detailUpdatedAt:detailCursor.get(`${sourceRepository}:Issue:${item.number}`)??'' })),
     ];
-    if (workItems.length) await graph.query(`UNWIND $rows AS row
+    // Keep relationship payloads out of WorkItem properties. They are written
+    // as graph edges below; FalkorDB's map update expression expects scalar
+    // properties here and rejects nested lists on some server versions.
+    const workItemRecords=workItems.map(({assigneeLogins,requestedReviewerLogins,linkedIssueNumbers,labels,...record})=>record);
+    if (workItemRecords.length) await graph.query(`UNWIND $rows AS row
       MATCH (r:Repository {fullName:$fullName}) MERGE (item:WorkItem {id:row.id}) SET item += row
       MERGE (r)-[membership:HAS_ITEM]->(item) SET membership.lastSyncedAt=$importedAt
       WITH item,row MERGE (person:Contributor {login:row.author})
-      MERGE (person)-[opened:OPENED]->(item) SET opened.createdAt=row.createdAt,opened.kind=row.kind`, { params: { fullName: repository.full_name, importedAt, rows: workItems } });
+      MERGE (person)-[opened:OPENED]->(item) SET opened.createdAt=row.createdAt,opened.kind=row.kind`, { params: { fullName: repository.full_name, importedAt, rows: workItemRecords } });
 
     if(workItems.length) {
       await graph.query(`UNWIND $rows AS row MATCH (item:WorkItem {id:row.id})
@@ -265,7 +280,10 @@ export async function POST(request: Request) {
     await graph.query('MATCH (review:Review) WHERE NOT (review)-[:ON_PR]->() DETACH DELETE review');
     await graph.query('MATCH (comment:Comment) WHERE NOT (comment)-[:ON_ITEM]->() DETACH DELETE comment');
     await graph.query('MATCH (person:Contributor) WHERE NOT (person)--() DETACH DELETE person');
-    await graph.query('MATCH (r:Repository {fullName:$fullName}) SET r.indexedReviews=$reviews,r.indexedFiles=$files,r.indexedComments=$comments,r.indexedContributors=$contributors', { params:{fullName:repository.full_name,reviews:reviews.length,files:changedFiles.length,comments:comments.length,contributors:people.length} });
+    await graph.query('MATCH (r:Repository {fullName:$fullName}) SET r += $properties,r.indexedReviews=$reviews,r.indexedFiles=$files,r.indexedComments=$comments,r.indexedContributors=$contributors', { params:{
+      fullName:repository.full_name,reviews:reviews.length,files:changedFiles.length,comments:comments.length,contributors:people.length,
+      properties:{fullName:repository.full_name,name:repository.name,url:repository.html_url,description:repository.description??'',defaultBranch:repository.default_branch,private:repository.private,upstreamRepository:sourceRepository!==repository.full_name?sourceRepository:'',importedAt,lastSyncedAt:importedAt,latestActivityAt,indexedPullRequests:pulls.length,indexedIssues:issues.length,indexedCommits:commits.length,indexedBranches:activeBranches.length},
+    } });
 
     const response = privateJson({ status: 'complete', source:'github-live', repository: repository.full_name, upstreamRepository:sourceRepository!==repository.full_name?sourceRepository:null, syncedAt: importedAt, latestActivityAt,
       indexWindow: { pullRequests: ITEM_WINDOW, issues: ITEM_WINDOW, detailedPullRequests: DETAIL_WINDOW, detailedIssues: DETAIL_WINDOW },

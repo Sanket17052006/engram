@@ -14,7 +14,7 @@ function compact(value:unknown):CachedItem {
 export async function readRepositoryCache(graph:CacheGraph,graphName:string,fullName:string):Promise<CachedSnapshot|null>{
   const repoResult=await graph.query(`MATCH (repo:Repository {fullName:$fullName}) RETURN properties(repo) AS repository LIMIT 1`,{params:{fullName}}) as {data?:Row[]};
   const metadata=object(repoResult.data?.[0]?.repository);
-  if(!Object.keys(metadata).length)return null;
+  if(!metadata.importedAt)return null;
   const [itemResult,commitResult]=await Promise.all([
     graph.query(`MATCH (:Repository {fullName:$fullName})-[:HAS_ITEM]->(item:WorkItem)
       RETURN properties(item) AS item ORDER BY item.updatedAt DESC LIMIT 1000`,{params:{fullName}}),
