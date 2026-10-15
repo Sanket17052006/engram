@@ -36,6 +36,7 @@ class AgentState(TypedDict, total=False):
     params: dict
     planner: str
     remember: bool
+    target_number: int
 
 
 mcp = FastMCP("Engram FalkorDB Graph Tools")
@@ -48,19 +49,27 @@ def _scope(arguments: dict):
 
 
 @mcp.tool()
-async def reviewer_candidates(user_id: str, repository: str, number: int) -> dict:
-    """Rank past reviewers by overlapping changed files for a pull request."""
-    cypher = """MATCH (repo:Repository {fullName:$repo})-[:HAS_ITEM]->(target:WorkItem {kind:'PR',number:$number})
-    MATCH (target)-[:MODIFIES]->(file:File)<-[:MODIFIES]-(prior:WorkItem {kind:'PR'})<-[:HAS_ITEM]-(repo)
-    MATCH (reviewer:Contributor)-[:SUBMITTED]->(review:Review)-[:ON_PR]->(prior)
+async def reviewer_candidates(user_id: str, repository: str, number: int = 0, term: str = "") -> dict:
+    """Resolve a pull request by number or title, then rank reviewers by shared-file history."""
+    terms = _search_terms(term)
+    cypher = """MATCH (repo:Repository {fullName:$repo})-[:HAS_ITEM]->(target:WorkItem {kind:'PR'})
+    WHERE ($number > 0 AND target.number=$number) OR ($number = 0 AND any(word IN $terms WHERE
+      replace(toLower(target.title),' db ',' database ') CONTAINS word
+      OR replace(toLower(coalesce(target.body,'')),' db ',' database ') CONTAINS word))
+    WITH repo,target,reduce(score=0,word IN $terms | score + CASE
+      WHEN replace(toLower(target.title),' db ',' database ') CONTAINS word THEN 2
+      WHEN replace(toLower(coalesce(target.body,'')),' db ',' database ') CONTAINS word THEN 1 ELSE 0 END) AS targetScore
+    ORDER BY targetScore DESC,target.updatedAt DESC LIMIT 1
+    OPTIONAL MATCH (target)-[:MODIFIES]->(file:File)<-[:MODIFIES]-(prior:WorkItem {kind:'PR'})<-[:HAS_ITEM]-(repo)
+    OPTIONAL MATCH (reviewer:Contributor)-[:SUBMITTED]->(review:Review)-[:ON_PR]->(prior)
     WHERE prior <> target AND reviewer.login <> target.author AND review.state <> 'DISMISSED'
     WITH target,reviewer,count(DISTINCT file) AS sharedFiles,count(DISTINCT prior) AS relatedReviews,
       collect(DISTINCT file.path)[0..5] AS matchingFiles,
       collect(DISTINCT {title:prior.title,url:prior.url,number:prior.number})[0..3] AS evidence
-    RETURN target.title,target.url,reviewer.login,sharedFiles,relatedReviews,matchingFiles,evidence
+    RETURN target.title,target.number,target.url,reviewer.login,sharedFiles,relatedReviews,matchingFiles,evidence
     ORDER BY sharedFiles DESC,relatedReviews DESC,reviewer.login ASC LIMIT 5"""
-    params = {"repo": repository, "number": number}
-    records = rows(await _scope(locals()).query(cypher, params), ["targetTitle", "targetUrl", "login", "sharedFiles", "relatedReviews", "matchingFiles", "evidence"])
+    params = {"repo": repository, "number": number, "term": term, "terms": terms}
+    records = rows(await _scope(locals()).query(cypher, params), ["targetTitle", "targetNumber", "targetUrl", "login", "sharedFiles", "relatedReviews", "matchingFiles", "evidence"])
     return {"records": records, "cypher": cypher, "params": params}
 
 
@@ -135,16 +144,22 @@ async def repository_search(user_id: str, repository: str, term: str, number: in
 def clean_term(prompt: str) -> str:
     cleaned = re.sub(r"#?\d{2,}", " ", prompt.lower())
     cleaned = re.sub(r"[^a-z0-9_./ -]", " ", cleaned)
-    stop = r"\b(who|should|could|would|can|has|have|worked|work|on|issue|pr|review|reviewer|knows|know|about|the|a|an|in|for|with|find|show|me|this|that|expert|expertise|owner|owns|specialist|help|decision|decided|rationale|why|did|was|do|we|contributed|contributor|contributors|contribution|contributions|commit|commits|recent|recently|active|activity)\b"
+    stop = r"\b(i|who|should|could|would|can|has|have|worked|work|on|issue|pr|pull|review|reviewer|knows|know|about|the|a|an|in|for|with|find|show|me|my|new|request|requested|requesting|this|that|expert|expertise|owner|owns|specialist|help|decision|decided|rationale|why|did|was|do|we|contributed|contributor|contributors|contribution|contributions|commit|commits|recent|recently|active|activity)\b"
     return re.sub(r"\s+", " ", re.sub(stop, " ", cleaned)).strip()
+
+
+def _search_terms(term: str) -> list[str]:
+    terms = [word for word in clean_term(term).split() if len(word) > 1]
+    canonical = {"db": "database", "migration": "migrat", "migrations": "migrat", "migrate": "migrat", "migrated": "migrat", "migrating": "migrat"}
+    return list(dict.fromkeys(canonical.get(word, word) for word in terms))
 
 
 def _fallback_route(prompt: str) -> tuple[str, str, str, dict]:
     term = clean_term(prompt)
     number = int(re.search(r"#?(\d{2,})", prompt).group(1)) if re.search(r"#?(\d{2,})", prompt) else 0
-    if re.search(r"\b(review|reviewer|code review)\b", prompt, re.I) and number:
+    if re.search(r"\b(review|reviewer|code review)\b", prompt, re.I):
         intent, agent, tool = "reviewer-router", "Reviewer Router", "reviewer_candidates"
-        arguments = {"number": number}
+        arguments = {"number": number, "term": clean_term(prompt)}
     elif re.search(r"\b(commit|commits|contribut(?:ed|or|ors|ions?)|recent(?:ly)? active)\b", prompt, re.I):
         intent, agent, tool = "contributor-activity", "Contributor Activity", "contributor_activity"
         arguments = {"term": term}
@@ -161,7 +176,7 @@ def _fallback_route(prompt: str) -> tuple[str, str, str, dict]:
 
 
 _TOOL_DECLARATIONS = [
-    {"name": "reviewer_candidates", "description": "Use multi-hop review and changed-file relationships to rank reviewers for a pull request.", "parameters": {"type": "OBJECT", "properties": {"number": {"type": "INTEGER", "description": "Pull request number"}}, "required": ["number"]}},
+    {"name": "reviewer_candidates", "description": "Resolve a pull request by its number or title words, then use multi-hop changed-file and review relationships to rank reviewers.", "parameters": {"type": "OBJECT", "properties": {"number": {"type": "INTEGER", "description": "Pull request number when the user explicitly names one; otherwise 0"}, "term": {"type": "STRING", "description": "Distinctive words from the pull request title when no number is given"}}, "required": ["number", "term"]}},
     {"name": "expertise_lookup", "description": "Find contributors with review history related to a skill, topic, or file path.", "parameters": {"type": "OBJECT", "properties": {"term": {"type": "STRING"}}, "required": ["term"]}},
     {"name": "decision_trace", "description": "Find issue or pull request discussions that may explain a technical decision.", "parameters": {"type": "OBJECT", "properties": {"term": {"type": "STRING"}}, "required": ["term"]}},
     {"name": "contributor_activity", "description": "Find contributors and recent imported commits matching a person or topic.", "parameters": {"type": "OBJECT", "properties": {"term": {"type": "STRING"}}, "required": ["term"]}},
@@ -219,6 +234,15 @@ async def route_question(state: AgentState) -> dict:
     else:
         intent, agent, tool, arguments = _fallback_route(prompt)
         planner = "Deterministic fallback router"
+    if re.search(r"\b(review|reviewer|code review)\b", prompt, re.I):
+        # For reviewer questions, explicit PR numbers win. Otherwise resolve
+        # the named PR from imported graph text; use the selected dropdown PR
+        # only for generic requests that provide no title or topic words.
+        explicit_number = re.search(r"#?(\d{2,})", prompt)
+        term = clean_term(prompt)
+        number = int(explicit_number.group(1)) if explicit_number else (0 if term else int(state.get("target_number", 0) or 0))
+        intent, agent, tool = "reviewer-router", "Reviewer Router", "reviewer_candidates"
+        arguments = {"number": number, "term": term}
     if tool not in available_tools:
         raise RuntimeError("The selected MCP graph tool is unavailable")
     # Tenant identity and repository scope are injected by the authenticated
@@ -231,8 +255,9 @@ async def route_question(state: AgentState) -> dict:
             arguments["number"] = max(0, min(int(arguments["number"]), 10_000_000))
         except (TypeError, ValueError):
             arguments["number"] = 0
-    if tool == "reviewer_candidates" and not arguments.get("number"):
-        intent, agent, tool, arguments = _fallback_route(prompt)
+    if tool == "reviewer_candidates":
+        arguments.setdefault("number", 0)
+        arguments.setdefault("term", clean_term(prompt))
     arguments.update({"user_id": state["user_id"], "repository": state["repository"]})
     return {"intent": intent, "agent_name": agent, "tool_name": tool, "tool_arguments": arguments, "planner": planner}
 
@@ -258,7 +283,8 @@ def _sources(intent: str, rows_: list[dict], number: int) -> list[dict]:
     evidence = []
     for row in rows_:
         if intent == "reviewer-router":
-            evidence.append({"title": f"PR #{number} · {row.get('targetTitle', '')}", "url": row.get("targetUrl"), "role": "Target pull request"})
+            target_number = row.get("targetNumber", number)
+            evidence.append({"title": f"PR #{target_number} · {row.get('targetTitle', '')}", "url": row.get("targetUrl"), "role": "Target pull request"})
             evidence.extend({"title": f"PR #{item.get('number', '')} · {item.get('title', '')}", "url": item.get("url"), "role": "Related review history"} for item in row.get("evidence", []))
         elif intent in {"expertise-finder", "contributor-activity"}:
             evidence.extend({"title": f"{row.get('login')} · {item.get('title', item.get('message', 'Repository activity'))}", "url": item.get("url"), "role": "Graph evidence"} for item in row.get("evidence", []))
@@ -280,9 +306,12 @@ def _sources(intent: str, rows_: list[dict], number: int) -> list[dict]:
 def _draft(intent: str, records: list[dict], number: int, term: str) -> str:
     if intent == "reviewer-router":
         if not records:
-            return f"I couldn't find a reviewer in the imported history with overlapping file experience for PR #{number}. Refresh the repository graph or inspect the pull request directly."
+            return f"I couldn't match that pull request to the imported graph. Choose it from the pull request selector or mention its number, then I can trace reviewer history."
         best = records[0]
-        return f"For PR #{number} (“{best.get('targetTitle', '')}”), @{best.get('login')} has the strongest match in the imported review history: {best.get('relatedReviews')} related pull request(s) touched {best.get('sharedFiles')} of the same files. This is a signal from recorded reviews and file overlap, not a guarantee of availability."
+        target_number = best.get("targetNumber", number)
+        if not best.get("login"):
+            return f"I found PR #{target_number} (“{best.get('targetTitle', '')}”), but the imported graph has no reviewer with overlapping file history for it yet."
+        return f"For PR #{target_number} (“{best.get('targetTitle', '')}”), @{best.get('login')} has the strongest match in the imported review history: {best.get('relatedReviews')} related pull request(s) touched {best.get('sharedFiles')} of the same files. This is a signal from recorded reviews and file overlap, not a guarantee of availability."
     if intent == "expertise-finder":
         if not records:
             return f"I couldn't find review history matching “{term}” in the imported graph. Try a filename or broader topic."
@@ -412,8 +441,8 @@ builder.add_edge("ground_and_remember", END)
 agent_graph = builder.compile()
 
 
-async def ask(user_id: str, login: str, repository: str, prompt: str, remember: bool = True) -> dict:
-    output = await agent_graph.ainvoke({"user_id": user_id, "login": login, "repository": repository, "prompt": prompt, "remember": remember})
+async def ask(user_id: str, login: str, repository: str, prompt: str, remember: bool = True, target_number: int = 0) -> dict:
+    output = await agent_graph.ainvoke({"user_id": user_id, "login": login, "repository": repository, "prompt": prompt, "remember": remember, "target_number": target_number})
     tool_result = output["tool_result"]
     intent = output["intent"]
     agent_name = output["agent_name"]

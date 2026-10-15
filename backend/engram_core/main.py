@@ -41,6 +41,7 @@ async def principal(
 
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=500)
+    target_number: int = Field(default=0, ge=0, le=10_000_000, alias="targetNumber")
 
 
 class MemorySaveRequest(BaseModel):
@@ -98,7 +99,7 @@ async def chat(body: ChatRequest, identity: Annotated[Principal, Depends(princip
         if not re.sub(r"\b(what|decision|decided|rationale|why|did|was|do|we|about|the|for|in|this|repo|repository)\b", " ", stripped).strip():
             raise HTTPException(status_code=400, detail="Add a topic or repository term to trace the related discussion.")
     try:
-        return await ask(identity.user_id, identity.login, identity.repository, prompt)
+        return await ask(identity.user_id, identity.login, identity.repository, prompt, target_number=body.target_number)
     except Exception as error:
         print(f"Agent run failed ({type(error).__name__}): {error}")
         raise HTTPException(status_code=503, detail="The graph agent could not complete this request. Check FalkorDB and try again.") from error
@@ -207,7 +208,7 @@ async def guest_chat(body: ChatRequest, identity: Annotated[Principal, Depends(p
     if not os.getenv("FALKORDB_URL"):
         raise HTTPException(status_code=503, detail="FalkorDB is not configured")
     try:
-        return await ask(identity.user_id, identity.login, identity.repository, prompt, remember=False)
+        return await ask(identity.user_id, identity.login, identity.repository, prompt, remember=False, target_number=body.target_number)
     except Exception as error:
         print(f"Guest graph agent run failed ({type(error).__name__}): {error}")
         raise HTTPException(status_code=503, detail="The graph agent could not complete this request. Check the public graph and try again.") from error

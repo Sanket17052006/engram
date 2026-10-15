@@ -10,5 +10,6 @@ export async function POST(request:Request){
   const checked=normalizedPublicRepository(body.repository);
   if(checked.response)return checked.response;
   const limit=checkGuestChatRateLimit(requestIp(request));if(!limit.allowed)return guestRateLimited(limit.retryAfterSeconds);
-  return guestCoreRequest('/v1/guest/chat',checked.repository!,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt})});
+  const targetNumber=typeof body.targetNumber==='number'&&Number.isInteger(body.targetNumber)&&body.targetNumber>0&&body.targetNumber<=10_000_000?body.targetNumber:0;
+  return guestCoreRequest('/v1/guest/chat',checked.repository!,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,targetNumber})});
 }
