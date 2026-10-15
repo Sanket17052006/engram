@@ -8,6 +8,11 @@ export const runtime = 'nodejs';
 const ITEM_WINDOW = 200;
 const DETAIL_WINDOW = 50;
 const BODY_LIMIT = 8_000;
+const privateJson = (body: unknown, init?: ResponseInit) => {
+  const response = NextResponse.json(body, init);
+  response.headers.set('Cache-Control', 'private, no-store, max-age=0');
+  return response;
+};
 
 type User = { id: number; login: string; html_url: string; avatar_url: string; type?: string };
 type Pull = { id: number; number: number; title: string; body: string | null; state: string; user: User; html_url: string; created_at: string; updated_at: string; closed_at: string | null; merged_at: string | null; additions: number; deletions: number; changed_files: number; base: { ref: string }; head: { ref: string }; comments: number; review_comments: number };
@@ -39,11 +44,11 @@ const compact = (item: { number: number; title: string; state: string; html_url:
 
 export async function GET(){
   const session=await readSession();
-  if(!session)return NextResponse.json({error:'Sign in with GitHub before reading a private repository snapshot.'},{status:401});
-  if(!session.selectedRepo)return NextResponse.json({error:'Choose a repository before reading its snapshot.'},{status:409});
-  if(!isFalkorConfigured())return NextResponse.json({error:'FalkorDB is not configured.'},{status:503});
-  try{const name=privateGraphName(session.id,session.selectedRepo);const snapshot=await readRepositoryCache(await getGraph(name),name,session.selectedRepo);return snapshot?NextResponse.json({...snapshot,source:'falkordb-cache'}):NextResponse.json({error:'No successful repository import is cached yet.'},{status:404})}
-  catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not read the cached repository graph.'},{status:503})}
+  if(!session)return privateJson({error:'Sign in with GitHub before reading a private repository snapshot.'},{status:401});
+  if(!session.selectedRepo)return privateJson({error:'Choose a repository before reading its snapshot.'},{status:409});
+  if(!isFalkorConfigured())return privateJson({error:'FalkorDB is not configured.'},{status:503});
+  try{const name=privateGraphName(session.id,session.selectedRepo);const snapshot=await readRepositoryCache(await getGraph(name),name,session.selectedRepo);return snapshot?privateJson({...snapshot,source:'falkordb-cache'}):privateJson({error:'No successful repository import is cached yet.'},{status:404})}
+  catch(error){return privateJson({error:error instanceof Error?error.message:'Could not read the cached repository graph.'},{status:503})}
 }
 
 export async function POST(request: Request) {
@@ -51,12 +56,12 @@ export async function POST(request: Request) {
   const fullName = typeof body.repository === 'string' ? body.repository.trim() : '';
   const [owner, repoName] = fullName.split('/');
   if (!owner || !repoName || fullName.split('/').length !== 2 || !/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repoName)) {
-    return NextResponse.json({ error: 'Choose a repository in owner/name format.' }, { status: 400 });
+    return privateJson({ error: 'Choose a repository in owner/name format.' }, { status: 400 });
   }
   const session = await readSession();
-  if (!session) return NextResponse.json({ error: 'Sign in with GitHub before importing a repository.' }, { status: 401 });
-  if (!session.installationId) return NextResponse.json({ error: 'Install Engram and grant access to a repository before importing it.' }, { status: 409 });
-  if (!isFalkorConfigured()) return NextResponse.json({ error: 'Add FALKORDB_URL before importing repository data.' }, { status: 503 });
+  if (!session) return privateJson({ error: 'Sign in with GitHub before importing a repository.' }, { status: 401 });
+  if (!session.installationId) return privateJson({ error: 'Install Engram and grant access to a repository before importing it.' }, { status: 409 });
+  if (!isFalkorConfigured()) return privateJson({ error: 'Add FALKORDB_URL before importing repository data.' }, { status: 503 });
 
   try {
     const graphName=privateGraphName(session.id,fullName);
@@ -76,10 +81,11 @@ export async function POST(request: Request) {
     ]);
     const commits=commitResult.rows;
     const issues = issueRows.filter((item) => !item.pull_request);
-    const pullCandidates=pulls.filter(pr=>pr.updated_at>(detailCursor.get(`PR:${pr.number}`)??''));
-    const issueCandidates=issues.filter(issue=>issue.updated_at>(detailCursor.get(`Issue:${issue.number}`)??''));
-    const detailedPulls=pullCandidates.slice(0,DETAIL_WINDOW);
-    const detailedIssues=issueCandidates.slice(0,DETAIL_WINDOW);
+    // Work item lists are fresh on every sync. Re-read details for the newest
+    // updated items too: reviews/comments can change independently of the
+    // activity fields we retain, and an old detail cursor could otherwise hide it.
+    const detailedPulls=pulls.slice(0,DETAIL_WINDOW);
+    const detailedIssues=issues.slice(0,DETAIL_WINDOW);
     const pullDetails = await inBatches(detailedPulls, 5, async (pr) => {
       const [reviews, reviewComments, issueComments, files] = await Promise.all([
         pages<Review>(`${prefix}/pulls/${pr.number}/reviews`, token, 200),
@@ -105,7 +111,7 @@ export async function POST(request: Request) {
     for (const person of knownPeople) if (person?.login) peopleByLogin.set(person.login, person);
     const latestActivityAt = [...pulls.map((item) => item.updated_at), ...issues.map((item) => item.updated_at)].sort().at(-1) ?? null;
 
-    if(repository.full_name.toLowerCase()!==fullName.toLowerCase())return NextResponse.json({error:'The selected repository name did not match the GitHub repository.'},{status:409});
+    if(repository.full_name.toLowerCase()!==fullName.toLowerCase())return privateJson({error:'The selected repository name did not match the GitHub repository.'},{status:409});
     const importedAt = new Date().toISOString();
     await graph.query('MERGE (r:Repository {fullName:$fullName}) SET r += $properties', { params: {
       fullName: repository.full_name,
@@ -178,9 +184,9 @@ export async function POST(request: Request) {
     await graph.query('MATCH (person:Contributor) WHERE NOT (person)--() DETACH DELETE person');
     await graph.query('MATCH (r:Repository {fullName:$fullName}) SET r.indexedReviews=$reviews,r.indexedFiles=$files,r.indexedComments=$comments,r.indexedContributors=$contributors', { params:{fullName:repository.full_name,reviews:reviews.length,files:changedFiles.length,comments:comments.length,contributors:people.length} });
 
-    const response = NextResponse.json({ status: 'complete', repository: repository.full_name, syncedAt: importedAt, latestActivityAt,
+    const response = privateJson({ status: 'complete', source:'github-live', repository: repository.full_name, syncedAt: importedAt, latestActivityAt,
       indexWindow: { pullRequests: ITEM_WINDOW, issues: ITEM_WINDOW, detailedPullRequests: DETAIL_WINDOW, detailedIssues: DETAIL_WINDOW },
-      detailBackfillPending:pullCandidates.length>detailedPulls.length||issueCandidates.length>detailedIssues.length,
+      detailCoverage:{refreshedPullRequests:detailedPulls.length,refreshedIssues:detailedIssues.length,scope:'most recently updated items'},
       warnings: commitResult.available ? [] : ['Commit history was unavailable. Grant Contents: read to include commit activity.'],
       pulls: pulls.map(compact), issues: issues.map(compact), graph: privateGraphName(session.id, repository.full_name),
       imported: { people: people.length, pullRequests: pulls.length, issues: issues.length, commits: commits.length, reviews: reviews.length, comments: comments.length, files: changedFiles.length },
@@ -191,14 +197,14 @@ export async function POST(request: Request) {
     console.error('GitHub repository sync failed:', error);
     if (error instanceof GithubApiError && error.rateLimited) {
       const retrySeconds = Math.max(1, Math.ceil((Date.parse(error.retryAt ?? '') - Date.now()) / 1000) || 60);
-      return NextResponse.json({
+      return privateJson({
         error: 'GitHub has temporarily limited repository reads. The last successful graph snapshot is still available; retry after the supplied time.',
         code: 'GITHUB_RATE_LIMITED', retryAt: error.retryAt, retryAfterSeconds: retrySeconds,
       }, { status: 429, headers: { 'Retry-After': String(retrySeconds) } });
     }
     if (error instanceof GithubApiError) {
-      return NextResponse.json({ error: error.message, code: 'GITHUB_API_ERROR', upstreamStatus: error.status }, { status: 502 });
+      return privateJson({ error: error.message, code: 'GITHUB_API_ERROR', upstreamStatus: error.status }, { status: 502 });
     }
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Repository import failed.' }, { status: 503 });
+    return privateJson({ error: error instanceof Error ? error.message : 'Repository import failed.' }, { status: 503 });
   }
 }

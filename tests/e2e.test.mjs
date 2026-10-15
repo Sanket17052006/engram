@@ -37,10 +37,12 @@ test('repository endpoints require an authenticated GitHub session', async () =>
   assert.equal(repos.status, 401);
   const privateSnapshot = await fetch(new URL('/api/github/sync', baseUrl));
   assert.equal(privateSnapshot.status, 401);
+  assert.match(privateSnapshot.headers.get('cache-control') ?? '', /private, no-store/);
   const sync = await fetch(new URL('/api/github/sync', baseUrl), {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repository: 'example-org/example-repository' }),
   });
   assert.equal(sync.status, 401);
+  assert.match(sync.headers.get('cache-control') ?? '', /private, no-store/);
 });
 
 test('chat validates input and requires a selected GitHub repository', async () => {
