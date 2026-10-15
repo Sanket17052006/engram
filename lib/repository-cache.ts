@@ -2,7 +2,7 @@ type CacheGraph={query:(query:string,options?:{params?:Record<string,unknown>})=
 export type CachedItem = { number:number;title:string;state:string;url:string;author:string;comments:number;updated_at:string };
 export type CachedCommit = {sha:string;message:string;url:string;authorLogin:string;authorName:string;date:string};
 export type CachedSnapshot = {
-  repository:string;pulls:CachedItem[];issues:CachedItem[];commits:CachedCommit[];graph:string;syncedAt:string;latestActivityAt:string|null;
+  repository:string;upstreamRepository:string|null;pulls:CachedItem[];issues:CachedItem[];commits:CachedCommit[];graph:string;syncedAt:string;latestActivityAt:string|null;
   counts:{pullRequests:number;issues:number;reviews:number;files:number;comments:number;commits:number;branches:number;contributors:number};stale:boolean;ageMs:number;
 };
 type Row=Record<string,unknown>;
@@ -29,7 +29,7 @@ export async function readRepositoryCache(graph:CacheGraph,graphName:string,full
   const commits=commitRecords.map(row=>{const commit=object(row.commit);return {sha:String(commit.sha??''),message:String(commit.message??''),url:String(commit.url??''),authorLogin:String(commit.authorLogin??''),authorName:String(commit.authorName??''),date:String(commit.date??'')}});
   const importedAt=String(metadata.importedAt??'');
   const ageMs=importedAt?Math.max(0,Date.now()-Date.parse(importedAt)):Number.POSITIVE_INFINITY;
-  return {repository:String(metadata.fullName??fullName),pulls,issues,commits,graph:graphName,syncedAt:importedAt,latestActivityAt:metadata.latestActivityAt?String(metadata.latestActivityAt):commits[0]?.date??null,
+  return {repository:String(metadata.fullName??fullName),upstreamRepository:metadata.upstreamRepository?String(metadata.upstreamRepository):null,pulls,issues,commits,graph:graphName,syncedAt:importedAt,latestActivityAt:metadata.latestActivityAt?String(metadata.latestActivityAt):commits[0]?.date??null,
     counts:{pullRequests:Number(metadata.indexedPullRequests??pulls.length),issues:Number(metadata.indexedIssues??issues.length),reviews:Number(metadata.indexedReviews??0),files:Number(metadata.indexedFiles??0),comments:Number(metadata.indexedComments??0),commits:Number(metadata.indexedCommits??commits.length),branches:Number(metadata.indexedBranches??0),contributors:Number(metadata.indexedContributors??0)},
     stale:ageMs>60*60*1000,ageMs};
 }

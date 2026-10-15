@@ -22,9 +22,9 @@ type Branch = { name:string; commit:{sha:string} };
 type ChangedFile = { filename: string; status: string; additions: number; deletions: number; changes: number; blob_url: string | null };
 type Review = { id: number; user: User | null; state: string; body: string | null; html_url: string; submitted_at: string | null };
 type Comment = { id: number; user: User | null; body: string | null; html_url: string; created_at: string; updated_at?: string };
-type Repo = { full_name: string; name: string; html_url: string; description: string | null; default_branch: string; private: boolean };
+type Repo = { full_name: string; name: string; html_url: string; description: string | null; default_branch: string; private: boolean; fork?:boolean; parent?:{full_name:string;name:string;html_url:string;description:string|null;default_branch:string;private:boolean} };
 
-async function pages<T>(path: string, token: string, max = ITEM_WINDOW): Promise<T[]> {
+async function pages<T>(path: string, token?: string, max = ITEM_WINDOW): Promise<T[]> {
   const rows: T[] = [];
   for (let page = 1; rows.length < max; page += 1) {
     const separator = path.includes('?') ? '&' : '?';
@@ -67,18 +67,32 @@ export async function POST(request: Request) {
   try {
     const graphName=privateGraphName(session.id,fullName);
     const graph=await getGraph(graphName);
-    const priorGraphState=await graph.query(`MATCH (r:Repository {fullName:$fullName})-[:HAS_ITEM]->(item:WorkItem)
-      RETURN item.number AS number,item.kind AS kind,item.detailUpdatedAt AS detailUpdatedAt`,{params:{fullName}}) as {data?:{number:number;kind:string;detailUpdatedAt?:string}[]};
-    const detailCursor=new Map((priorGraphState.data??[]).map(item=>[`${item.kind}:${item.number}`,String(item.detailUpdatedAt??'')]));
     const token = await installationToken(session.installationId);
     const prefix = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}`;
     const repository = await githubApi<Repo>(prefix, token);
+    const upstream=repository.fork&&repository.parent&&!repository.parent.private?repository.parent:null;
+    const sourceRepository=upstream?.full_name??repository.full_name;
+    const priorGraphState=await graph.query(`MATCH (r:Repository {fullName:$fullName})-[:HAS_ITEM]->(item:WorkItem)
+      RETURN item.number AS number,item.kind AS kind,item.sourceRepository AS sourceRepository,item.detailUpdatedAt AS detailUpdatedAt`,{params:{fullName}}) as {data?:{number:number;kind:string;sourceRepository?:string;detailUpdatedAt?:string}[]};
+    const detailCursor=new Map((priorGraphState.data??[]).map(item=>[`${item.sourceRepository??repository.full_name}:${item.kind}:${item.number}`,String(item.detailUpdatedAt??'')]));
+    const [sourceOwner,sourceName]=sourceRepository.split('/');
+    const sourcePrefix=`/repos/${encodeURIComponent(sourceOwner)}/${encodeURIComponent(sourceName)}`;
+    let sourceToken:string|undefined=token;
+    if(upstream){
+      try{await githubApi<Repo>(sourcePrefix,token)}
+      catch(error){
+        // A user installation may grant access to the fork but not its public
+        // parent. Fall back to GitHub's public read API; never fall back on rate limits.
+        if(error instanceof GithubApiError&&!error.rateLimited&&(error.status===403||error.status===404))sourceToken=undefined;
+        else throw error;
+      }
+    }
     const [pulls, issueRows, defaultCommits, contributors, branchRows] = await Promise.all([
-      pages<Pull>(`${prefix}/pulls?state=all&sort=updated&direction=desc`, token, ITEM_WINDOW),
-      pages<Issue>(`${prefix}/issues?state=all&sort=updated&direction=desc`, token, ITEM_WINDOW),
+      pages<Pull>(`${sourcePrefix}/pulls?state=all&sort=updated&direction=desc`, sourceToken, ITEM_WINDOW),
+      pages<Issue>(`${sourcePrefix}/issues?state=all&sort=updated&direction=desc`, sourceToken, ITEM_WINDOW),
       // Contents:read is needed for this endpoint; if the app has not been granted it, keep syncing the rest.
       pages<Commit>(`${prefix}/commits?sha=${encodeURIComponent(repository.default_branch)}`, token, ITEM_WINDOW).then(rows=>({available:true,rows})).catch(() => ({available:false,rows:[] as Commit[]})),
-      pages<User>(`${prefix}/contributors`, token, 100).catch(() => [] as User[]),
+      pages<User>(`${sourcePrefix}/contributors`, sourceToken, 100).catch(() => [] as User[]),
       pages<Branch>(`${prefix}/branches`,token,100).catch(()=>[] as Branch[]),
     ]);
     // The default branch can be weeks behind active feature branches. Fetch head
@@ -113,18 +127,18 @@ export async function POST(request: Request) {
     const detailedIssues=issues.slice(0,DETAIL_WINDOW);
     const pullDetails = await inBatches(detailedPulls, 5, async (pr) => {
       const [reviews, reviewComments, issueComments, files] = await Promise.all([
-        pages<Review>(`${prefix}/pulls/${pr.number}/reviews`, token, 200),
-        pages<Comment>(`${prefix}/pulls/${pr.number}/comments`, token, 200),
-        pages<Comment>(`${prefix}/issues/${pr.number}/comments`, token, 200),
-        pages<ChangedFile>(`${prefix}/pulls/${pr.number}/files`, token, 300),
+        pages<Review>(`${sourcePrefix}/pulls/${pr.number}/reviews`, sourceToken, 200),
+        pages<Comment>(`${sourcePrefix}/pulls/${pr.number}/comments`, sourceToken, 200),
+        pages<Comment>(`${sourcePrefix}/issues/${pr.number}/comments`, sourceToken, 200),
+        pages<ChangedFile>(`${sourcePrefix}/pulls/${pr.number}/files`, sourceToken, 300),
       ]);
-      return { number: pr.number, reviews, comments: [...reviewComments, ...issueComments], files };
+      return { sourceRepository, number: pr.number, reviews, comments: [...reviewComments, ...issueComments], files };
     });
     const issueDetails = await inBatches(detailedIssues, 5, async (issue) => ({
-      number: issue.number, comments: await pages<Comment>(`${prefix}/issues/${issue.number}/comments`, token, 200),
+      sourceRepository, number: issue.number, comments: await pages<Comment>(`${sourcePrefix}/issues/${issue.number}/comments`, sourceToken, 200),
     }));
-    for(const item of detailedPulls)detailCursor.set(`PR:${item.number}`,item.updated_at);
-    for(const item of detailedIssues)detailCursor.set(`Issue:${item.number}`,item.updated_at);
+    for(const item of detailedPulls)detailCursor.set(`${sourceRepository}:PR:${item.number}`,item.updated_at);
+    for(const item of detailedIssues)detailCursor.set(`${sourceRepository}:Issue:${item.number}`,item.updated_at);
 
     const peopleByLogin = new Map<string, User>();
     const knownPeople = [
@@ -152,15 +166,15 @@ export async function POST(request: Request) {
     const importedAt = new Date().toISOString();
     await graph.query('MERGE (r:Repository {fullName:$fullName}) SET r += $properties', { params: {
       fullName: repository.full_name,
-      properties: { fullName: repository.full_name, name: repository.name, url: repository.html_url, description: repository.description ?? '', defaultBranch: repository.default_branch, private: repository.private, importedAt, lastSyncedAt:importedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length, indexedCommits:commits.length,indexedBranches:activeBranches.length },
+      properties: { fullName: repository.full_name, name: repository.name, url: repository.html_url, description: repository.description ?? '', defaultBranch: repository.default_branch, private: repository.private, upstreamRepository:sourceRepository!==repository.full_name?sourceRepository:'', importedAt, lastSyncedAt:importedAt, latestActivityAt, indexedPullRequests:pulls.length, indexedIssues:issues.length, indexedCommits:commits.length,indexedBranches:activeBranches.length },
     } });
 
     const people = Array.from(peopleByLogin.values()).map((user) => ({ login: user.login, url: user.html_url, avatar: user.avatar_url, type: user.type ?? 'User' }));
     if (people.length) await graph.query('UNWIND $rows AS row MERGE (u:Contributor {login:row.login}) SET u += row', { params: { rows: people } });
 
     const workItems = [
-      ...pulls.map((item) => ({ id: String(item.id), kind: 'PR', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', assigneeLogins:(item.assignees??[]).map(user=>user.login),requestedReviewerLogins:(item.requested_reviewers??[]).map(user=>user.login), linkedIssueNumbers:Array.from((item.body??'').matchAll(/\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)\b/gi),match=>Number(match[1])), createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: item.merged_at ?? '', comments: item.comments + item.review_comments, base: item.base.ref, head: item.head.ref, additions: item.additions, deletions: item.deletions, changedFiles: item.changed_files, labels: (item.labels??[]).map(label=>label.name), detailUpdatedAt:detailCursor.get(`PR:${item.number}`)??'' })),
-      ...issues.map((item) => ({ id: String(item.id), kind: 'Issue', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', assigneeLogins:(item.assignees??[]).map(user=>user.login),requestedReviewerLogins:[],linkedIssueNumbers:[] as number[], createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: '', comments: item.comments, base: '', head: '', additions: 0, deletions: 0, changedFiles: 0, labels: item.labels.map((label) => label.name),detailUpdatedAt:detailCursor.get(`Issue:${item.number}`)??'' })),
+      ...pulls.map((item) => ({ id: String(item.id), sourceRepository, kind: 'PR', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', assigneeLogins:(item.assignees??[]).map(user=>user.login),requestedReviewerLogins:(item.requested_reviewers??[]).map(user=>user.login), linkedIssueNumbers:Array.from((item.body??'').matchAll(/\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)\b/gi),match=>Number(match[1])), createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: item.merged_at ?? '', comments: item.comments + item.review_comments, base: item.base.ref, head: item.head.ref, additions: item.additions, deletions: item.deletions, changedFiles: item.changed_files, labels: (item.labels??[]).map(label=>label.name), detailUpdatedAt:detailCursor.get(`${sourceRepository}:PR:${item.number}`)??'' })),
+      ...issues.map((item) => ({ id: String(item.id), sourceRepository, kind: 'Issue', number: item.number, title: item.title, body: (item.body ?? '').slice(0, BODY_LIMIT), state: item.state, url: item.html_url, author: item.user?.login ?? 'unknown', assigneeLogins:(item.assignees??[]).map(user=>user.login),requestedReviewerLogins:[],linkedIssueNumbers:[] as number[], createdAt: item.created_at, updatedAt: item.updated_at, closedAt: item.closed_at ?? '', mergedAt: '', comments: item.comments, base: '', head: '', additions: 0, deletions: 0, changedFiles: 0, labels: item.labels.map((label) => label.name),detailUpdatedAt:detailCursor.get(`${sourceRepository}:Issue:${item.number}`)??'' })),
     ];
     if (workItems.length) await graph.query(`UNWIND $rows AS row
       MATCH (r:Repository {fullName:$fullName}) MERGE (item:WorkItem {id:row.id}) SET item += row
@@ -182,14 +196,15 @@ export async function POST(request: Request) {
     if(requestedReviewers.length)await graph.query(`UNWIND $rows AS row MATCH (item:WorkItem {id:row.id,kind:'PR'})
       MATCH (person:Contributor {login:row.login}) MERGE (person)-[relationship:REVIEW_REQUESTED]->(item)
       SET relationship.requestedAt=item.updatedAt`,{params:{rows:requestedReviewers}});
-    const labels=workItems.flatMap(item=>item.labels.map(name=>({id:item.id,name})));
+    const sourceRepositories=Array.from(new Set(workItems.map(item=>item.sourceRepository)));
+    const labels=workItems.flatMap(item=>item.labels.map(name=>({id:item.id,name,sourceRepository:item.sourceRepository})));
     if(labels.length)await graph.query(`UNWIND $rows AS row MATCH (item:WorkItem {id:row.id})
-      MERGE (label:RepositoryLabel {name:row.name,repository:$fullName})
-      MERGE (item)-[relationship:HAS_LABEL]->(label) SET relationship.kind=item.kind`,{params:{fullName:repository.full_name,rows:labels}});
-    const linkedIssues=workItems.flatMap(item=>item.kind==='PR'?item.linkedIssueNumbers.map(number=>({id:item.id,number})):[]);
-    if(linkedIssues.length)await graph.query(`UNWIND $rows AS row MATCH (pr:WorkItem {id:row.id,kind:'PR'}),(issue:WorkItem {number:row.number,kind:'Issue'})
+      MERGE (label:RepositoryLabel {name:row.name,repository:row.sourceRepository})
+      MERGE (item)-[relationship:HAS_LABEL]->(label) SET relationship.kind=item.kind`,{params:{rows:labels}});
+    const linkedIssues=workItems.flatMap(item=>item.kind==='PR'?item.linkedIssueNumbers.map(number=>({id:item.id,number,sourceRepository:item.sourceRepository})):[]);
+    if(linkedIssues.length)await graph.query(`UNWIND $rows AS row MATCH (pr:WorkItem {id:row.id,kind:'PR'}),(issue:WorkItem {number:row.number,kind:'Issue',sourceRepository:row.sourceRepository})
       MERGE (pr)-[relationship:CLOSES]->(issue) SET relationship.source='GitHub closing reference'`,{params:{rows:linkedIssues}});
-    await graph.query('MATCH (label:RepositoryLabel {repository:$fullName}) WHERE NOT (label)<-[:HAS_LABEL]-() DETACH DELETE label',{params:{fullName:repository.full_name}});
+    await graph.query('MATCH (label:RepositoryLabel) WHERE label.repository IN $sourceRepositories AND NOT (label)<-[:HAS_LABEL]-() DETACH DELETE label',{params:{sourceRepositories}});
 
     const commitsToWrite = commits.map((commit) => ({ sha: commit.sha, message: commit.commit.message.slice(0, BODY_LIMIT), url: commit.html_url, authorLogin: commit.author?.login ?? '', authorName: commit.commit.author?.name ?? '', date: commit.commit.committer?.date??commit.commit.author?.date??'', authorDate:commit.commit.author?.date??'',branchNames:commit.branchNames??[repository.default_branch] }));
     if (commitsToWrite.length) await graph.query(`UNWIND $rows AS row MATCH (r:Repository {fullName:$fullName})
@@ -205,30 +220,30 @@ export async function POST(request: Request) {
     if(commitBranches.length)await graph.query(`UNWIND $rows AS row MATCH (commit:Commit {sha:row.sha})
       MERGE (branch:RepositoryBranch {name:row.name,repository:$fullName}) MERGE (commit)-[relationship:ON_BRANCH]->(branch)`,{params:{fullName:repository.full_name,rows:commitBranches}});
 
-    const reviews = pullDetails.flatMap((detail) => detail.reviews.map((review) => ({ review, number: detail.number }))).filter((entry) => entry.review.user);
+    const reviews = pullDetails.flatMap((detail) => detail.reviews.map((review) => ({ review, number: detail.number, sourceRepository:detail.sourceRepository }))).filter((entry) => entry.review.user);
     if (reviews.length) await graph.query(`UNWIND $rows AS row
-      MATCH (item:WorkItem {number:row.number,kind:'PR'}) MERGE (review:Review {id:row.id})
+      MATCH (item:WorkItem {number:row.number,kind:'PR',sourceRepository:row.sourceRepository}) MERGE (review:Review {id:row.id})
       SET review.state=row.state,review.body=row.body,review.url=row.url,review.submittedAt=row.submittedAt
       WITH item,review,row MATCH (person:Contributor {login:row.login})
       MERGE (person)-[submission:SUBMITTED]->(review) SET submission.state=row.state,submission.submittedAt=row.submittedAt
-      MERGE (review)-[reviewLink:ON_PR]->(item) SET reviewLink.reviewUrl=row.url,reviewLink.submittedAt=row.submittedAt`, { params: { rows: reviews.map(({ review, number }) => ({ id: String(review.id), state: review.state, body: (review.body ?? '').slice(0, 3000), url: review.html_url, submittedAt: review.submitted_at ?? '', number, login: review.user!.login })) } });
+      MERGE (review)-[reviewLink:ON_PR]->(item) SET reviewLink.reviewUrl=row.url,reviewLink.submittedAt=row.submittedAt`, { params: { rows: reviews.map(({ review, number, sourceRepository }) => ({ id: String(review.id), state: review.state, body: (review.body ?? '').slice(0, 3000), url: review.html_url, submittedAt: review.submitted_at ?? '', number, sourceRepository, login: review.user!.login })) } });
 
-    const changedFiles = pullDetails.flatMap((detail) => detail.files.map((file) => ({ file, number: detail.number })));
+    const changedFiles = pullDetails.flatMap((detail) => detail.files.map((file) => ({ file, number: detail.number, sourceRepository:detail.sourceRepository })));
     if (changedFiles.length) await graph.query(`UNWIND $rows AS row
-      MATCH (item:WorkItem {number:row.number,kind:'PR'}) MERGE (file:File {path:row.path,repository:$fullName})
+      MATCH (item:WorkItem {number:row.number,kind:'PR',sourceRepository:row.sourceRepository}) MERGE (file:File {path:row.path,repository:row.sourceRepository})
       SET file.status=row.status,file.additions=row.additions,file.deletions=row.deletions,file.changes=row.changes,file.url=row.url
-      MERGE (item)-[change:MODIFIES]->(file) SET change.status=row.status,change.additions=row.additions,change.deletions=row.deletions,change.changes=row.changes`, { params: { fullName: repository.full_name, rows: changedFiles.map(({ file, number }) => ({ path: file.filename, status: file.status, additions: file.additions, deletions: file.deletions, changes: file.changes, url: file.blob_url ?? '', number })) } });
+      MERGE (item)-[change:MODIFIES]->(file) SET change.status=row.status,change.additions=row.additions,change.deletions=row.deletions,change.changes=row.changes`, { params: { rows: changedFiles.map(({ file, number, sourceRepository }) => ({ path: file.filename, status: file.status, additions: file.additions, deletions: file.deletions, changes: file.changes, url: file.blob_url ?? '', number, sourceRepository })) } });
 
     const comments = [
-      ...pullDetails.flatMap((detail) => detail.comments.map((comment) => ({ comment, number: detail.number, kind: 'PR' }))),
-      ...issueDetails.flatMap((detail) => detail.comments.map((comment) => ({ comment, number: detail.number, kind: 'Issue' }))),
+      ...pullDetails.flatMap((detail) => detail.comments.map((comment) => ({ comment, number: detail.number, kind: 'PR', sourceRepository:detail.sourceRepository }))),
+      ...issueDetails.flatMap((detail) => detail.comments.map((comment) => ({ comment, number: detail.number, kind: 'Issue', sourceRepository:detail.sourceRepository }))),
     ].filter((entry) => entry.comment.user);
     if (comments.length) await graph.query(`UNWIND $rows AS row
-      MATCH (item:WorkItem {number:row.number,kind:row.kind}) MERGE (comment:Comment {id:row.id})
+      MATCH (item:WorkItem {number:row.number,kind:row.kind,sourceRepository:row.sourceRepository}) MERGE (comment:Comment {id:row.id})
       SET comment.body=row.body,comment.url=row.url,comment.createdAt=row.createdAt,comment.updatedAt=row.updatedAt
       WITH item,comment,row MATCH (person:Contributor {login:row.login})
       MERGE (person)-[authored:WROTE]->(comment) SET authored.createdAt=row.createdAt
-      MERGE (comment)-[context:ON_ITEM]->(item) SET context.kind=row.kind,context.createdAt=row.createdAt`, { params: { rows: comments.map(({ comment, number, kind }) => ({ id: String(comment.id), body: (comment.body ?? '').slice(0, 3000), url: comment.html_url, createdAt: comment.created_at, updatedAt: comment.updated_at ?? comment.created_at, number, kind, login: comment.user!.login })) } });
+      MERGE (comment)-[context:ON_ITEM]->(item) SET context.kind=row.kind,context.createdAt=row.createdAt`, { params: { rows: comments.map(({ comment, number, kind, sourceRepository }) => ({ id: String(comment.id), body: (comment.body ?? '').slice(0, 3000), url: comment.html_url, createdAt: comment.created_at, updatedAt: comment.updated_at ?? comment.created_at, number, kind, sourceRepository, login: comment.user!.login })) } });
 
     for(const [relationship,label,kind,property] of [
       ['OPENED','WorkItem','PR','pullRequestsOpened'],['OPENED','WorkItem','Issue','issuesOpened'],
@@ -246,13 +261,13 @@ export async function POST(request: Request) {
     const commitShas = commitsToWrite.map((commit) => commit.sha);
     if(defaultCommits.available)await graph.query(`MATCH (r:Repository {fullName:$fullName})-[:HAS_COMMIT]->(commit:Commit)
       WHERE NOT commit.sha IN $shas DETACH DELETE commit`, { params: { fullName: repository.full_name, shas: commitShas } });
-    await graph.query(`MATCH (file:File {repository:$fullName}) WHERE NOT (file)<-[:MODIFIES]-() DETACH DELETE file`, { params: { fullName: repository.full_name } });
+    await graph.query(`MATCH (file:File) WHERE file.repository IN $sourceRepositories AND NOT (file)<-[:MODIFIES]-() DETACH DELETE file`, { params: { sourceRepositories } });
     await graph.query('MATCH (review:Review) WHERE NOT (review)-[:ON_PR]->() DETACH DELETE review');
     await graph.query('MATCH (comment:Comment) WHERE NOT (comment)-[:ON_ITEM]->() DETACH DELETE comment');
     await graph.query('MATCH (person:Contributor) WHERE NOT (person)--() DETACH DELETE person');
     await graph.query('MATCH (r:Repository {fullName:$fullName}) SET r.indexedReviews=$reviews,r.indexedFiles=$files,r.indexedComments=$comments,r.indexedContributors=$contributors', { params:{fullName:repository.full_name,reviews:reviews.length,files:changedFiles.length,comments:comments.length,contributors:people.length} });
 
-    const response = privateJson({ status: 'complete', source:'github-live', repository: repository.full_name, syncedAt: importedAt, latestActivityAt,
+    const response = privateJson({ status: 'complete', source:'github-live', repository: repository.full_name, upstreamRepository:sourceRepository!==repository.full_name?sourceRepository:null, syncedAt: importedAt, latestActivityAt,
       indexWindow: { pullRequests: ITEM_WINDOW, issues: ITEM_WINDOW, detailedPullRequests: DETAIL_WINDOW, detailedIssues: DETAIL_WINDOW },
       detailCoverage:{refreshedPullRequests:detailedPulls.length,refreshedIssues:detailedIssues.length,scope:'most recently updated items'},
       warnings: defaultCommits.available ? [] : ['Commit history was unavailable. Grant Contents: read to include commit activity.'],
