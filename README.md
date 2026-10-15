@@ -1,95 +1,200 @@
+<p align="center">
+  <img src="public/engram-brain-network.png" alt="Engram brain and graph mark" width="160" />
+</p>
+
 # Engram
 
-Engram turns GitHub repository activity into graph-backed project memory. A LangGraph agent selects an MCP graph tool, queries FalkorDB with parameterized Cypher, and returns the evidence path and source links. Gemini performs tool selection and natural-language phrasing when available; graph-safe routing and answer templates remain as fallbacks.
+**A living, graph-backed memory for the work inside a GitHub repository.**
+
+Engram connects contributors, pull requests, issues, reviews, discussions, commits, and files so teams can find the context behind their code and work.
+
+<br />
+
+## The problem Engram solves
+
+Important project knowledge is scattered across GitHub activity. A pull request shows a change, but the surrounding review history, people who know the affected files, linked issues, and earlier decisions can take time to piece together. That context is especially hard to recover when a contributor is new to a repository or the people who remember the history are unavailable.
+
+Engram imports a repository a user explicitly selects, connects its activity as a FalkorDB graph, and uses graph queries to answer practical questions with source links. The product is repository-agnostic: each user signs in with GitHub and chooses which repository to index. No repository is preselected.
+
+## What it can do
+
+- **Find reviewers from prior work.** For a pull request, follow changed files to earlier pull requests and reviews, then rank contributors by overlapping review history.
+- **Find relevant experience.** Search review and file history for people who have worked on a topic or path.
+- **Trace discussions.** Find issues, pull requests, and comments that may explain a change or decision, with links to the original GitHub records.
+- **Explore contributor connections.** Start from the signed-in contributor and follow connected people, work items, commits, files, and relationships one neighborhood at a time.
+- **Keep project memory across questions.** Save graph-grounded question and answer episodes in the user-and-repository graph, and make recent relevant episodes available to later agent runs.
+- **Inspect the evidence.** Answers include the selected investigator, MCP graph tool, Cypher query and parameters, source links, memory use, and agent handoff.
+
+Engram's agents investigate and recommend based on repository evidence. They do not write to GitHub or make code changes.
+
+## How an answer is produced
+
+1. **Authenticate and scope.** Next.js checks the GitHub session and the user's selected repository.
+2. **Plan the investigation.** The FastAPI LangGraph workflow chooses a specialist and its MCP graph tool. Gemini selects the tool when configured; deterministic routing is the fallback.
+3. **Query graph evidence.** The read-only MCP tool runs parameterized Cypher against the user's private FalkorDB repository graph.
+4. **Ground the response.** The workflow builds an answer from graph records and their GitHub source URLs. Gemini may phrase this grounded draft; it does not supply the underlying facts.
+5. **Remember the investigation.** Engram stores an `Episode` and agent handoff in the same user-and-repository graph.
+6. **Return a traceable answer.** The user receives the response, evidence, query, parameters, sources, and memory details.
+
+The question is routed to one of five specialist tools: `reviewer_candidates`, `expertise_lookup`, `decision_trace`, `contributor_activity`, or `repository_search`. Gemini can select the read-only tool when configured. If Gemini is unavailable, deterministic routing selects a tool instead. The selected tool—not the language model—queries FalkorDB and supplies the evidence. Gemini receives a graph-derived draft and bounded source metadata for phrasing; invalid or unavailable synthesis falls back to the deterministic graph answer.
+
+## Real agent execution, verified
+
+The agent workflow is implemented in Python with LangGraph and FastMCP. The graph defines planning, memory retrieval, MCP tool execution, and grounded answer/memory steps. A live smoke run on **October 15, 2026** exercised five different questions against an imported repository graph:
+
+| Investigator | MCP tool | Evidence rows | Source links |
+|---|---|---:|---:|
+| Reviewer Router | `reviewer_candidates` | 1 | 3 |
+| Expertise Finder | `expertise_lookup` | 2 | 3 |
+| Decision Trace | `decision_trace` | 8 | 6 |
+| Contributor Activity | `contributor_activity` | 2 | 6 |
+| Project Guide | `repository_search` | 8 | 6 |
+| **Total** | **5 completed tool calls** | **21** | **24** |
+
+All five calls returned graph records, produced source-linked answers, and wrote an `Episode` to FalkorDB. Gemini selected the tool and phrased the answer in all five checks. The counts above describe that verification snapshot; they are not fixed product limits or a promise about another repository's available history.
+
+## The graph model
+
+FalkorDB stores typed nodes and relationships instead of flattening activity into unrelated lists. Every graph is scoped to a GitHub user and selected repository.
+
+| Node | Example information |
+|---|---|
+| `Repository` | Name, URL, default branch, visibility, import timestamp, and activity timestamp |
+| `Contributor` | GitHub login and profile, observed PRs/issues, reviews, comments, commits, and activity |
+| `WorkItem` | Pull request or issue, title, state, author, dates, labels, assignees, and change statistics |
+| `Review` / `Comment` | Author, review state or comment text, time, and original GitHub URL |
+| `File` | Path, change status, additions, deletions, and source URL |
+| `Commit` / `RepositoryBranch` | SHA, message, author, date, branch, and GitHub URL |
+| `Episode` / `Agent` | Question, grounded answer, investigator, intent, evidence count, memory timestamp, and handoff |
+
+Relationships represent repository membership, authorship, assignment, requested review, review submission, comments, changed files, commits, branches, labels, and issue-closing references. Relationship properties preserve context such as review state, dates, and file change counts. The explorer begins with the user's connected work and displays a bounded local neighborhood; users can follow connections as needed instead of rendering the whole repository graph at once.
+
+## Architecture and technology
+
+| Layer | Technology | Why it is used |
+|---|---|---|
+| Web app and UI | Next.js 15 App Router, React 18, TypeScript, Tailwind CSS | Responsive UI, server routes for GitHub integration, and one deployment artifact for the web layer |
+| Agent core | Python 3.12, FastAPI, LangGraph | Structured agent workflow, typed API boundaries, and asynchronous graph/provider calls |
+| Tool interface | FastMCP | Exposes the graph investigators through a discoverable MCP tool boundary |
+| Graph database | FalkorDB | Redis-protocol graph storage and parameterized Cypher queries over relationships |
+| Repository data | GitHub App REST API | User-authorized installation tokens with repository-scoped read access |
+| Optional language model | Gemini API | Tool selection and concise phrasing of graph-grounded drafts; deterministic operation remains available without it |
+| Local/deployment runtime | Docker Compose, Caddy | Local services and a single-host HTTPS deployment option |
+
+## Sign-in and data boundaries
+
+1. A person signs in with GitHub through Engram's GitHub App user-authorization flow. OAuth `state` and PKCE protect the callback.
+2. Engram verifies the GitHub identity and encrypts the session cookie with `jose`. The cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` in production.
+3. The user installs Engram and grants repository access, then chooses one repository from that installation.
+4. Next.js uses a GitHub installation token to read the selected repository. The token, App private key, and client secret stay on the server.
+5. The verified GitHub user ID and selected repository determine the private FalkorDB graph name. Chat and graph APIs require the signed-in session and selected repository; responses are marked `private, no-store`.
+6. Next.js calls the FastAPI core with a separate shared internal key and identity/repository headers. In production, the app, core, and database communicate over a private Docker network; the core and database are not exposed through Caddy.
+
+Cloning the source does not include `.env.local`, GitHub credentials, tokens, or graph data. A local clone cannot sign in to an owner's account: each developer must configure their own GitHub App credentials and session secret. In a hosted instance, each user authorizes their own GitHub account and chooses the repository they grant Engram access to.
+
+The only GitHub App permissions needed are read-only **Metadata**, **Issues**, **Pull requests**, and **Contents** (for commit history). Engram does not request write permissions. Installations can be revoked from GitHub at any time.
+
+## Import freshness and coverage
+
+Imports fetch current GitHub API data when the user requests a refresh and use `cache: no-store`. A failed or rate-limited refresh leaves the last successful graph snapshot available; the UI reports its import and newest-activity timestamps. Rate-limit responses include GitHub's retry timing when provided.
+
+Import is intentionally bounded to make API use and graph size predictable:
+
+- Up to **200** recently updated pull requests and **200** recently updated issues.
+- Reviews, comments, and changed files for up to the **50** most recently updated pull requests; comments for up to the **50** most recently updated issues.
+- Up to **100** contributors.
+- Up to **200** deduplicated commits, including recent commits from the **12** most active branches, with up to **30** commits per selected branch.
+- Record bodies and discussion text are truncated before storage.
+- Up to **100** recent memory episodes are retained per user and repository graph.
+
+This is a recent-activity index rather than a complete historical archive. GitHub API access and repository size determine which source records are available. Forks use public upstream PR and issue context when accessible; branch and commit activity remains tied to the selected repository.
 
 ## Run locally
 
-Requirements: Node.js 22+, a persistent FalkorDB instance, a GitHub App for user-connected repositories, and a Gemini API key for natural-language synthesis. Graph retrieval and deterministic answers still work if Gemini is unavailable.
+### Requirements
+
+- Node.js 22+
+- Docker with Compose
+- A GitHub App configured for user authorization and repository read access
+- Gemini API key (optional; deterministic agent routing and graph-grounded answers work without it)
+
+### 1. Configure environment
 
 ```sh
-npm install
 cp .env.example .env.local
-# Fill GitHub/Gemini credentials and generate ENGRAM_INTERNAL_API_KEY before starting services.
+openssl rand -hex 32
+```
+
+Set the generated value as `SESSION_SECRET`, and set a different random value for `ENGRAM_INTERNAL_API_KEY`. Add your GitHub App slug, App ID, Client ID, Client secret, and private key. Keep `.env.local` private; it is ignored by Git.
+
+For local development on port `3100`, set the GitHub App user callback URL to:
+
+```text
+http://localhost:3100/api/github/auth/callback
+```
+
+Set the App setup URL to:
+
+```text
+http://localhost:3100/api/github/callback
+```
+
+Enable GitHub App user authorization, use read-only repository permissions, and allow installation on any account if users outside your own account should connect their repositories. Engram uses a separate PKCE sign-in flow; leave “Request user authorization during installation” disabled.
+
+### 2. Start FalkorDB and the agent core
+
+```sh
 docker compose up -d --build falkordb core
+```
+
+### 3. Start the web app
+
+```sh
+npm ci
 npm run dev
 ```
 
-Open `http://localhost:3100`. A first-time user signs in with GitHub, installs Engram on their account, and selects one of the repositories granted to that installation. Returning users who already installed Engram are resolved directly to their repository picker instead of being sent back to GitHub's installation settings. Engram is repository-agnostic: it only imports the repository the user selects, and each user's selected repository is stored in a separate private graph. To allow users outside the app owner's account, set the GitHub App installation target to **Any account**. To connect a repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, a random `SESSION_SECRET`, and a separate `ENGRAM_INTERNAL_API_KEY` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
+Open [http://localhost:3100](http://localhost:3100), sign in, install Engram, choose a repository, and import it. Optional service endpoints: [FalkorDB browser](http://localhost:3001) and [FastAPI health](http://localhost:8000/health).
 
-The React interface remains in Next.js. Chat, graph exploration, and node detail now call a private Python FastAPI core. LangGraph routes a question to a named agent; Gemini selects from read-only FalkorDB graph tools exposed through MCP; those tools execute parameterized Cypher against the signed-in user's private graph. Graph-grounded answers and bounded source references are stored as episodes in that same graph. Gemini is used for tool selection and natural-language phrasing when available; deterministic graph routing and answer templates remain the fallback. Start `docker compose up -d --build` for FalkorDB and FastAPI, then run the Next.js app on port 3100.
+## Configuration reference
 
-## Hackathon fit
+See [`.env.example`](.env.example) for local settings and [`.env.production.example`](.env.production.example) for deployment settings. Never commit either a populated `.env.local` or a downloaded private key.
 
-**Lead track — Agents That Act on Connected Data:** a tool-selecting LangGraph agent routes a request to a bounded MCP tool, runs multi-hop Cypher in FalkorDB, and recommends the next reviewer or investigation path from observed links. The app exposes the chosen agent, MCP call, Cypher, graph records, and source URLs so the result can be checked.
-
-**Supporting tracks:** Track 02 is covered by tenant-scoped `Episode` memories and recorded agent handoffs in the same private graph; Track 03 is covered by the people, pull request, issue, review, comment, commit, and file relationships imported from the selected repository, with evidence links and refresh timestamps.
-
-## Free self-hosted deployment
-
-For a no-monthly-compute-cost beta, the best fit is one OCI Always Free Ampere VM running the app, Caddy, and FalkorDB in Docker. Oracle currently lists up to 2 OCPUs and 12 GB RAM in its Always Free A1 allowance. This avoids putting private repository data in a free database tier without continuous persistence/backups. A single free VM is still one failure domain: it is suitable for a personal beta or small pilot, not a high-availability or guaranteed-SLA production service. Oracle may reclaim Always Free instances it considers idle; keep backups outside that VM. [OCI Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
-
-Vercel Hobby is a poor fit for the full stack: its cron jobs run at most daily and it does not host the FalkorDB process. Render's free services spin down after inactivity and have ephemeral local filesystems, which is unsuitable for the graph volume. [Vercel cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing), [Render free service limits](https://render.com/docs/free)
-
-1. Provision an Ubuntu OCI A1 VM, attach the public IP to a DNS name, and open only SSH, HTTP, and HTTPS in the cloud firewall. Do not expose port 6379.
-2. Install Docker Engine and Compose on the VM, clone this repository, and copy `.env.production.example` to `.env.production`.
-3. Set a random hex `FALKORDB_PASSWORD`, `SESSION_SECRET`, and `ENGRAM_INTERNAL_API_KEY`; enter the GitHub App credentials and set `GEMINI_API_KEY` plus `GEMINI_MODEL=gemini-3.1-flash-lite`. Configure the GitHub App callback and setup URLs with `https://<your-domain>/api/github/auth/callback` and `https://<your-domain>/api/github/callback`.
-4. Point the domain to the VM and run `docker compose --env-file .env.production -f docker-compose.production.yml up -d --build`. Caddy obtains and renews HTTPS certificates. FalkorDB has authentication, append-only persistence, a named data volume, and no public port.
-5. Pin `FALKORDB_IMAGE` to a version tested by your deployment before inviting users. Set a recurring off-instance backup and test restore before storing data you cannot afford to lose.
-
-The graph is served from the last successful snapshot while a GitHub refresh is rate-limited; retries are explicit and GitHub's `Retry-After` is returned. This build still uses user-triggered imports. Webhook-driven continuous sync, a managed job queue, automated off-site backup verification, and account deletion/export are required before offering it as a generally available multi-tenant service.
-
-The GitHub App needs read-only **Metadata**, **Issues**, **Pull requests**, and **Contents** repository permissions. Contents access is used for commit history; the rest of the sync continues with a warning if that permission is unavailable. For a local app running on port 3100, configure the user callback as `http://localhost:3100/api/github/auth/callback` and the installation setup URL as `http://localhost:3100/api/github/callback`. The user callback must match the active Next.js origin. Do not enable “Request user authorization during installation”; Engram has a separate PKCE sign-in step. Install the app only on repositories you choose.
-
-For a deployed instance, register the production callback and setup URLs on the GitHub App, use HTTPS, provide a stable `SESSION_SECRET` and an `ENGRAM_INTERNAL_API_KEY`, and keep the FalkorDB and FastAPI services on the private Docker network. Set `GEMINI_API_KEY` and `GEMINI_MODEL` on the server for tool selection and answer synthesis. Gemini selects only among bounded, read-only MCP graph tools; FastAPI validates the signed-in user and repository scope before tool execution. The model receives only a graph-derived draft and bounded source metadata for answer phrasing. Invalid citations or provider errors fall back to the deterministic graph answer. The answer panel reports the selected agent, MCP tool, graph query, memory use, and linked sources.
-
-FalkorDB uses the Redis protocol at `redis://localhost:6379`; its optional browser UI is on `http://localhost:3001`. The project overview reports when the latest import completed and the newest activity timestamp found.
-
-## Graph model
-
-Each connected user and repository gets a separate FalkorDB graph. A workspace only becomes available after GitHub sign-in and an explicit repository selection; no repository is preselected or publicly imported.
-
-| Node | Useful properties |
+| Variable | Purpose |
 |---|---|
-| `Repository` | full name, URL, description, default branch, visibility, import time, latest activity time, indexed counts |
-| `WorkItem` | PR or issue kind, number, title, bounded body, state, author, labels, timestamps, comment count, merge and change statistics |
-| `Contributor` | login, profile URL, avatar, PRs/issues opened, reviews/comments written, commits authored, last activity |
-| `Review` | state, submission time, source URL, bounded review body |
-| `File` | path, change status, additions, deletions, total changes, GitHub URL |
-| `Comment` | author relationship, bounded body, timestamps, source URL |
-| `Commit` | SHA, message, author, authored date, source URL |
-| `Episode` and `Agent` | private question/answer history, selected agent, intent, evidence count, and handoff |
+| `GITHUB_APP_SLUG`, `GITHUB_APP_ID`, `GITHUB_APP_CLIENT_ID` | Identify the GitHub App |
+| `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY` | Server-only GitHub App credentials |
+| `SESSION_SECRET` | Encrypts the user session cookie |
+| `FALKORDB_URL` | FalkorDB Redis-protocol connection string |
+| `ENGRAM_CORE_URL`, `ENGRAM_INTERNAL_API_KEY` | Private Next.js-to-FastAPI connection |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Optional tool selection and answer phrasing |
+| `APP_DOMAIN`, `FALKORDB_PASSWORD`, `FALKORDB_IMAGE` | Production deployment and protected database settings |
 
-Edges encode repository membership, authorship, opened work, submitted reviews, file changes, comment context, commit authorship, and agent handoffs. Edges retain dates, review state, file-change statistics, or source context where applicable. The graph explorer exposes both node and edge attributes.
+## Self-hosting and trade-offs
 
-## Agents and track coverage
+The production Compose file runs Next.js, FastAPI, FalkorDB, and Caddy on one host. Caddy terminates HTTPS; only HTTP and HTTPS are published, while FalkorDB and FastAPI stay on the internal network. Set a strong unique session secret, internal API key, and database password. Use a pinned FalkorDB image version and keep tested backups outside the host.
 
-- **Track 01 · Agents That Act on Connected Data:** Reviewer Router follows a target PR’s changed files to previous PRs, then through their reviews to contributors. It ranks matches by shared files and related reviews, returns evidence links, and shows the parameterized Cypher. The decision is recorded as a private graph episode and handed to the selected specialist. Reviewer ranking needs PR, review, and file history; if the selected repository has no such history in its import window, Engram explains the evidence gap instead of inventing a recommendation.
-- **Track 02 · Agent Memory and Coordination:** Context Retriever hands evidence to Reviewer Router, Expertise Finder, Decision Trace, or Project Guide. Question/answer episodes, agent identity, evidence count, timestamp, and handoff are persisted in each user's private repository graph; follow-up questions can retrieve prior episodes. The graph keeps the latest 100 episodes per user/repository.
-- **Track 03 · Company Brain:** the graph joins contributors, PRs, issues, comments, reviews, changed files, commits, and decisions/discussions when present. Expertise results are based on observed review activity. Decision Trace surfaces matching source discussions; it does not claim that every merged PR is a formally approved decision. Answers include source links and the Cypher query. Import freshness is bounded by the configured recent windows and GitHub rate limits.
+This single-host design keeps the stack straightforward and inexpensive to operate, but it is one failure domain and needs independent backups. Sync is user-triggered rather than continuously updated by webhooks or a job queue. The deployment guide therefore recommends testing off-host backups and restore procedures before storing data that cannot be re-imported.
 
-## Freshness and import bounds
-
-Every import requests the newest updated pull requests and issues first with `cache: no-store`, stores `syncedAt` and `latestActivityAt`, and removes work items and commits that have fallen outside the bounded index. For a public fork, Engram reads pull requests, issues, reviews, comments, and changed files from the public parent repository so fork users can see the real project collaboration history. Commits and branches still come from the selected repository, so contributor branch activity stays tied to the user's fork. The UI names the upstream source when it is included. GitHub's transient server errors receive short retries. Primary or secondary rate limits return HTTP 429 with `Retry-After` and `retryAt`; a failed refresh does not delete or overwrite the last successful graph snapshot. Workspace views read the cached graph first and continue to show it if refresh is unavailable. The GitHub App sync indexes up to 200 PRs and 200 issues. It fetches reviews, comments, and changed files for up to the 50 most recently updated PRs and comments for up to the 50 most recently updated issues. Commit indexing checks the repository's listed branch heads, then imports up to 30 recent commits from each of the 12 branches with the newest head activity, deduplicated to 200 commits total. This catches recent work on feature branches even when the default branch has not advanced. Contributor lists are capped at 100. Each record body is truncated before it enters the graph. Imports use the same bounded windows for every selected repository.
-
-This is a recent-activity memory, not a complete archive. Data outside the import windows is not searchable. Sync currently runs when the user requests an import; webhook-driven refresh and a background incremental job are future deployment work. A production service also needs a durable user database, account deletion/export flow, operational logging policy, and managed secret storage. The app can run as a self-hosted service today, but a public multi-tenant launch still needs those operational controls, abuse protection, monitoring, and a deployment domain; a local Docker setup alone is not a hosted production service.
-
-## API routes
-
-- `GET /api/github/auth/start` and `/api/github/auth/callback` — GitHub App user authorization with state and PKCE.
-- `GET /api/github/start` and `/api/github/callback` — installation handoff, account verification, and session binding.
-- `GET /api/github/repos` — repositories visible to the verified installation.
-- `POST /api/github/sync` — bounded repository import into the user/repository graph.
-- `GET /api/github/sync` — serve the last successful private-repository snapshot without calling GitHub.
-- `GET /api/github/status`, `POST /api/github/logout` — connection status and local sign-out.
-- `POST /api/chat` — routed graph query for the signed-in user’s selected repository, with answer, evidence, Cypher, memory, and handoff metadata.
-- `GET /api/graph/explore` and `GET /api/node/:nodeId` — graph shape, node attributes, and relationship attributes for the selected repository; both require a signed-in session.
+Gemini improves routing and phrasing but adds a provider dependency and sends the question plus bounded graph-derived answer context to Google's API. Disable its key to keep queries and answer generation on the local deterministic path. FalkorDB stores repository activity as a graph, which makes relationship traversal direct; the cost is that Engram currently indexes a bounded recent window rather than every GitHub event.
 
 ## Checks
 
 ```sh
 npm run build
-npm run dev
 npm run test:e2e
 ```
 
-The end-to-end suite defaults to `http://localhost:3100`; set `ENGRAM_E2E_URL` to override it. It exercises service status, OAuth/PKCE redirect construction, unauthenticated access boundaries, FalkorDB query routes, and explorer response shape. A full GitHub installation sync test requires an installed app and a browser-authorized session.
+The end-to-end suite verifies the GitHub setup page, OAuth state/PKCE redirect, unauthenticated repository/chat/graph access, cache headers, and service-status credential redaction. Live agent verification additionally exercises each of the five MCP graph tools against FalkorDB and confirms evidence, source links, answer mode, and persisted episodes.
+
+## API routes
+
+| Route | Purpose |
+|---|---|
+| `GET /api/github/auth/start`, `GET /api/github/auth/callback` | GitHub user sign-in with state and PKCE |
+| `GET /api/github/start`, `GET /api/github/callback` | Installation flow and account verification |
+| `GET /api/github/repos` | List repositories available to the verified installation |
+| `POST /api/github/sync`, `GET /api/github/sync` | Import a selected repository or read its cached snapshot |
+| `GET /api/github/status`, `POST /api/github/logout` | Connection state and sign-out |
+| `POST /api/chat` | Run the scoped graph-agent workflow |
+| `GET /api/graph/explore`, `GET /api/node/:nodeId` | Explore connected graph neighborhoods and node details |
