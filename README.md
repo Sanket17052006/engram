@@ -1,6 +1,6 @@
 # Engram
 
-Engram turns GitHub repository activity into a graph-backed project memory. People ask natural-language questions; deterministic agents query FalkorDB with parameterized Cypher and return source links, the query, and the evidence path. No LLM is required for the answer path.
+Engram turns GitHub repository activity into graph-backed project memory. A LangGraph agent selects an MCP graph tool, queries FalkorDB with parameterized Cypher, and returns the evidence path and source links. Gemini performs tool selection and natural-language phrasing when available; graph-safe routing and answer templates remain as fallbacks.
 
 ## Run locally
 
@@ -8,12 +8,21 @@ Requirements: Node.js 22+, a persistent FalkorDB instance, a GitHub App for user
 
 ```sh
 npm install
-docker compose up -d falkordb
 cp .env.example .env.local
+# Fill GitHub/Gemini credentials and generate ENGRAM_INTERNAL_API_KEY before starting services.
+docker compose up -d --build falkordb core
 npm run dev
 ```
 
-Open `http://localhost:3000`. A first-time user signs in with GitHub, installs Engram on their account, and selects one of the repositories granted to that installation. Engram is repository-agnostic: it only imports the repository the user selects, and each user's selected repository is stored in a separate private graph. To allow users outside the app owner's account, set the GitHub App installation target to **Any account**. To connect a repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, and a random `SESSION_SECRET` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
+Open `http://localhost:3100`. A first-time user signs in with GitHub, installs Engram on their account, and selects one of the repositories granted to that installation. Returning users who already installed Engram are resolved directly to their repository picker instead of being sent back to GitHub's installation settings. Engram is repository-agnostic: it only imports the repository the user selects, and each user's selected repository is stored in a separate private graph. To allow users outside the app owner's account, set the GitHub App installation target to **Any account**. To connect a repository, create a GitHub App and set the App slug, App ID, Client ID, Client secret, private key, a random `SESSION_SECRET`, and a separate `ENGRAM_INTERNAL_API_KEY` in `.env.local`. Keep that file and the downloaded PEM private key out of Git.
+
+The React interface remains in Next.js. Chat, graph exploration, and node detail now call a private Python FastAPI core. LangGraph routes a question to a named agent; Gemini selects from read-only FalkorDB graph tools exposed through MCP; those tools execute parameterized Cypher against the signed-in user's private graph. Graph-grounded answers and bounded source references are stored as episodes in that same graph. Gemini is used for tool selection and natural-language phrasing when available; deterministic graph routing and answer templates remain the fallback. Start `docker compose up -d --build` for FalkorDB and FastAPI, then run the Next.js app on port 3100.
+
+## Hackathon fit
+
+**Lead track — Agents That Act on Connected Data:** a tool-selecting LangGraph agent routes a request to a bounded MCP tool, runs multi-hop Cypher in FalkorDB, and recommends the next reviewer or investigation path from observed links. The app exposes the chosen agent, MCP call, Cypher, graph records, and source URLs so the result can be checked.
+
+**Supporting tracks:** Track 02 is covered by tenant-scoped `Episode` memories and recorded agent handoffs in the same private graph; Track 03 is covered by the people, pull request, issue, review, comment, commit, and file relationships imported from the selected repository, with evidence links and refresh timestamps.
 
 ## Free self-hosted deployment
 
@@ -23,15 +32,15 @@ Vercel Hobby is a poor fit for the full stack: its cron jobs run at most daily a
 
 1. Provision an Ubuntu OCI A1 VM, attach the public IP to a DNS name, and open only SSH, HTTP, and HTTPS in the cloud firewall. Do not expose port 6379.
 2. Install Docker Engine and Compose on the VM, clone this repository, and copy `.env.production.example` to `.env.production`.
-3. Set a random hex `FALKORDB_PASSWORD` and `SESSION_SECRET`, enter the GitHub App credentials, and set `GEMINI_API_KEY` plus `GEMINI_MODEL=gemini-3.1-flash-lite` for answer synthesis. Configure the GitHub App callback and setup URLs with `https://<your-domain>/api/github/auth/callback` and `https://<your-domain>/api/github/callback`.
+3. Set a random hex `FALKORDB_PASSWORD`, `SESSION_SECRET`, and `ENGRAM_INTERNAL_API_KEY`; enter the GitHub App credentials and set `GEMINI_API_KEY` plus `GEMINI_MODEL=gemini-3.1-flash-lite`. Configure the GitHub App callback and setup URLs with `https://<your-domain>/api/github/auth/callback` and `https://<your-domain>/api/github/callback`.
 4. Point the domain to the VM and run `docker compose --env-file .env.production -f docker-compose.production.yml up -d --build`. Caddy obtains and renews HTTPS certificates. FalkorDB has authentication, append-only persistence, a named data volume, and no public port.
 5. Pin `FALKORDB_IMAGE` to a version tested by your deployment before inviting users. Set a recurring off-instance backup and test restore before storing data you cannot afford to lose.
 
 The graph is served from the last successful snapshot while a GitHub refresh is rate-limited; retries are explicit and GitHub's `Retry-After` is returned. This build still uses user-triggered imports. Webhook-driven continuous sync, a managed job queue, automated off-site backup verification, and account deletion/export are required before offering it as a generally available multi-tenant service.
 
-The GitHub App needs read-only **Metadata**, **Issues**, **Pull requests**, and **Contents** repository permissions. Contents access is used for commit history; the rest of the sync continues with a warning if that permission is unavailable. Configure the user callback as `http://localhost:3000/api/github/auth/callback` and the installation setup URL as `http://localhost:3000/api/github/callback`. Do not enable “Request user authorization during installation”; Engram has a separate PKCE sign-in step. Install the app only on repositories you choose.
+The GitHub App needs read-only **Metadata**, **Issues**, **Pull requests**, and **Contents** repository permissions. Contents access is used for commit history; the rest of the sync continues with a warning if that permission is unavailable. For a local app running on port 3100, configure the user callback as `http://localhost:3100/api/github/auth/callback` and the installation setup URL as `http://localhost:3100/api/github/callback`. The user callback must match the active Next.js origin. Do not enable “Request user authorization during installation”; Engram has a separate PKCE sign-in step. Install the app only on repositories you choose.
 
-For a deployed instance, register the production callback and setup URLs on the GitHub App, use HTTPS, provide a stable `SESSION_SECRET`, and set the FalkorDB URL to a private network endpoint with authentication/TLS where supported. Set `GEMINI_API_KEY` and `GEMINI_MODEL` on the server for hosted answer synthesis. Engram runs a parameterized FalkorDB query first, then sends a bounded set of graph records and source links plus the graph-derived draft to Gemini. The model must cite supplied source IDs; invalid citations or provider errors fall back to the deterministic graph answer. The answer panel labels Gemini synthesis or graph fallback and reports how many graph records and links support it. Only bounded evidence for the selected repository question is sent to Gemini; do not use this provider mode for repository data you do not want sent to Google.
+For a deployed instance, register the production callback and setup URLs on the GitHub App, use HTTPS, provide a stable `SESSION_SECRET` and an `ENGRAM_INTERNAL_API_KEY`, and keep the FalkorDB and FastAPI services on the private Docker network. Set `GEMINI_API_KEY` and `GEMINI_MODEL` on the server for tool selection and answer synthesis. Gemini selects only among bounded, read-only MCP graph tools; FastAPI validates the signed-in user and repository scope before tool execution. The model receives only a graph-derived draft and bounded source metadata for answer phrasing. Invalid citations or provider errors fall back to the deterministic graph answer. The answer panel reports the selected agent, MCP tool, graph query, memory use, and linked sources.
 
 FalkorDB uses the Redis protocol at `redis://localhost:6379`; its optional browser UI is on `http://localhost:3001`. The project overview reports when the latest import completed and the newest activity timestamp found.
 

@@ -71,3 +71,17 @@ export async function verifyInstallation(installationId:string){
   if(!response.ok)throw new Error(`GitHub installation verification failed (${response.status}).`);
   return response.json() as Promise<{account:{login:string;id:number};repository_selection:'all'|'selected'}>;
 }
+/** Resolve this signed-in GitHub account's existing installation without sending
+ * returning users back through the install wizard. GitHub exposes this lookup
+ * specifically for an authenticated GitHub App (JWT); it does not enumerate
+ * other users' installations to the browser. */
+export async function installationForAccount(login:string){
+  const jwt=await appJwt();
+  try{
+    const response=await githubFetch(`${API}/users/${encodeURIComponent(login)}/installation`,{headers:{Authorization:`Bearer ${jwt}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}});
+    return await response.json() as {id:number;account:{login:string;id:number};repository_selection:'all'|'selected'};
+  }catch(error){
+    if(error instanceof GithubApiError&&error.status===404)return null;
+    throw error;
+  }
+}

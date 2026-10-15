@@ -1,4 +1,16 @@
 services:
+  core:
+    build:
+      context: ./backend
+    env_file:
+      - .env.local
+    environment:
+      FALKORDB_URL: redis://falkordb:6379
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    depends_on:
+      - falkordb
   falkordb:
     image: falkordb/falkordb:latest
     ports:
