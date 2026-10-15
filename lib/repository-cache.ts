@@ -3,7 +3,7 @@ export type CachedItem = { number:number;title:string;state:string;url:string;au
 export type CachedCommit = {sha:string;message:string;url:string;authorLogin:string;authorName:string;date:string};
 export type CachedSnapshot = {
   repository:string;pulls:CachedItem[];issues:CachedItem[];commits:CachedCommit[];graph:string;syncedAt:string;latestActivityAt:string|null;
-  counts:{pullRequests:number;issues:number;reviews:number;files:number;comments:number;commits:number;contributors:number};stale:boolean;ageMs:number;
+  counts:{pullRequests:number;issues:number;reviews:number;files:number;comments:number;commits:number;branches:number;contributors:number};stale:boolean;ageMs:number;
 };
 type Row=Record<string,unknown>;
 const object=(value:unknown):Row=>value&&typeof value==='object'?value as Row:{};
@@ -30,6 +30,6 @@ export async function readRepositoryCache(graph:CacheGraph,graphName:string,full
   const importedAt=String(metadata.importedAt??'');
   const ageMs=importedAt?Math.max(0,Date.now()-Date.parse(importedAt)):Number.POSITIVE_INFINITY;
   return {repository:String(metadata.fullName??fullName),pulls,issues,commits,graph:graphName,syncedAt:importedAt,latestActivityAt:metadata.latestActivityAt?String(metadata.latestActivityAt):commits[0]?.date??null,
-    counts:{pullRequests:Number(metadata.indexedPullRequests??pulls.length),issues:Number(metadata.indexedIssues??issues.length),reviews:Number(metadata.indexedReviews??0),files:Number(metadata.indexedFiles??0),comments:Number(metadata.indexedComments??0),commits:Number(metadata.indexedCommits??commits.length),contributors:Number(metadata.indexedContributors??0)},
+    counts:{pullRequests:Number(metadata.indexedPullRequests??pulls.length),issues:Number(metadata.indexedIssues??issues.length),reviews:Number(metadata.indexedReviews??0),files:Number(metadata.indexedFiles??0),comments:Number(metadata.indexedComments??0),commits:Number(metadata.indexedCommits??commits.length),branches:Number(metadata.indexedBranches??0),contributors:Number(metadata.indexedContributors??0)},
     stale:ageMs>60*60*1000,ageMs};
 }
