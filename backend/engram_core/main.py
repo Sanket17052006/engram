@@ -223,6 +223,38 @@ def _node_label(properties: dict, kind: str, node_id: str) -> str:
     return str(properties.get("title") or properties.get("login") or properties.get("fullName") or properties.get("name") or properties.get("path") or (str(content).splitlines()[0][:58] if content else f"{kind} {properties.get('number', node_id)}"))
 
 
+async def _add_second_hop(graph, nodes: dict, edges: list, focus_id: str, neighbor_ids: list[int]) -> None:
+    """Add a bounded second hop so the explorer can show paths between records."""
+    if not neighbor_ids:
+        return
+    expanded = rows(await graph.query("""MATCH (neighbor)-[r]-(other)
+        WHERE id(neighbor) IN $neighborIds AND id(other)<>$focusId
+          AND NOT (id(other) IN $neighborIds)
+          AND NOT ('Repository' IN labels(neighbor))
+          AND NOT ('Contributor' IN labels(neighbor))
+          AND NOT ('Episode' IN labels(neighbor))
+          AND NOT ('Repository' IN labels(other))
+          AND NOT ('ProjectMemory' IN labels(other))
+          AND NOT ('Episode' IN labels(other))
+        RETURN id(neighbor),labels(neighbor),properties(neighbor),id(other),labels(other),properties(other),type(r),properties(r)
+        LIMIT 100""", {"neighborIds": neighbor_ids, "focusId": int(focus_id)}), [
+        "neighborId", "neighborLabels", "neighbor", "otherId", "otherLabels", "other", "relation", "relationProperties"
+    ])
+    seen = {(edge["source"], edge["target"], edge["type"]) for edge in edges}
+    for index, item in enumerate(expanded):
+        neighbor_id = str(item["neighborId"])
+        other_id = str(item["otherId"])
+        other_props = item.get("other") or {}
+        other_kind = (item.get("otherLabels") or ["Node"])[0]
+        nodes.setdefault(other_id, {"id": other_id, "label": _node_label(other_props, other_kind, other_id), "type": other_kind, "properties": other_props})
+        key = (neighbor_id, other_id, item["relation"])
+        reverse_key = (other_id, neighbor_id, item["relation"])
+        if key in seen or reverse_key in seen:
+            continue
+        seen.add(key)
+        edges.append({"id": f"edge-hop2-{index}", "source": neighbor_id, "target": other_id, "type": item["relation"], "properties": item.get("relationProperties") or {}})
+
+
 @app.get("/v1/graph/explore")
 async def explore(identity: Annotated[Principal, Depends(principal)], node_id: Annotated[str | None, Query(alias="nodeId")] = None):
     if node_id and not node_id.isdigit():
@@ -256,6 +288,8 @@ async def explore(identity: Annotated[Principal, Depends(principal)], node_id: A
             kind = (item.get("otherLabels") or ["Node"])[0]
             nodes.setdefault(other_id, {"id": other_id, "label": _node_label(properties, kind, other_id), "type": kind, "properties": properties})
             edges.append({"id": f"edge-{index}", "source": focus_id, "target": other_id, "type": item["relation"], "properties": item.get("relationProperties") or {}})
+        neighbor_ids = list(dict.fromkeys(int(item["otherId"]) for item in data if item.get("otherId") is not None))
+        await _add_second_hop(graph, nodes, edges, focus_id, neighbor_ids)
         return {"nodes": list(nodes.values()), "edges": edges, "focus": {"id": focus_id, "label": nodes[focus_id]["label"], "type": focus_kind}, "meta": {"source": "falkordb", "repository": identity.repository, "viewer": identity.login, "mode": "neighborhood" if node_id else "my-connections", "truncated": len(data) > 60}}
     except HTTPException:
         raise
@@ -306,6 +340,8 @@ async def guest_explore(identity: Annotated[Principal, Depends(principal)], node
             kind = (item.get("otherLabels") or ["Node"])[0]
             nodes.setdefault(other_id, {"id": other_id, "label": _node_label(properties, kind, other_id), "type": kind, "properties": properties})
             edges.append({"id": f"edge-{index}", "source": focus_id, "target": other_id, "type": item["relation"], "properties": item.get("relationProperties") or {}})
+        neighbor_ids = list(dict.fromkeys(int(item["otherId"]) for item in data if item.get("otherId") is not None))
+        await _add_second_hop(graph, nodes, edges, focus_id, neighbor_ids)
         return {"nodes": list(nodes.values()), "edges": edges, "focus": {"id": focus_id, "label": nodes[focus_id]["label"], "type": focus_kind}, "meta": {"source": "falkordb", "repository": identity.repository, "mode": "repository-overview" if not node_id else "neighborhood", "truncated": len(data) > 60}}
     except HTTPException:
         raise

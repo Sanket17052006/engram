@@ -24,6 +24,14 @@ Engram connects those records as a graph and lets an agent investigate the paths
 
 Public guest graphs are isolated by repository. Guest questions are read-only and are not saved as personal memory.
 
+## Demo walkthrough: find a reviewer from graph evidence
+
+Start with a public repository and one of its pull requests. Ask, “Who should review this change?” The Reviewer Router reads the pull request’s changed files, follows those files to earlier pull requests, then follows submitted reviews to the contributors who reviewed that work. It ranks candidates from those observed connections and returns the supporting repository records with GitHub links.
+
+The graph explorer makes that reasoning inspectable. **All** shows the connected neighborhood; PRs, Issues, Reviews, Reviewers, Assignees, Commits, Comments, Files, Contributors, and Labels narrow it to matching graph records or relationships. Select a node to inspect its properties and direct links, then follow it to load a new neighborhood. The same paths can be inspected through the Cypher query and parameters shown with an answer.
+
+For a short recording, show the public-repository import, the reviewer question, the evidence-backed result, then open the graph and filter to **Reviews** or **Reviewers**. This demonstrates why the graph matters: the recommendation is supported by a path from changed files through prior work and review activity, rather than a keyword match alone. No GitHub write or maintainer action is part of this flow.
+
 ## How the agent works
 
 ```mermaid
@@ -77,6 +85,7 @@ Parameterized Cypher traversals find the connected records and calculate evidenc
 | Ask a repository question | Next.js API route, FastAPI agent core, LangGraph workflow |
 | Discover investigators and call tools | FastMCP catalog and parameterized, read-only FalkorDB tools |
 | Review graph paths and source records | Cypher trace, source links, neighborhood explorer, node detail |
+| Filter and follow graph connections | FalkorDB-backed All, PR, issue, review, reviewer, assignee, commit, comment, file, contributor, and label views |
 | Remember an investigation across sessions | `Episode` nodes, user-saved `ProjectMemory` nodes, `HAS_MEMORY`, `PRESERVES`, and `GROUNDED_IN` relationships |
 | Use natural phrasing when configured | Optional Gemini tool selection and constrained graph-grounded synthesis |
 
