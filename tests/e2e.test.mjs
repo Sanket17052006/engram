@@ -74,6 +74,28 @@ test('graph and node APIs require an authenticated selected repository', async (
   assert.match(node.headers.get('cache-control') ?? '', /private, no-store/);
 });
 
+test('saved project memory stays behind the signed-in repository boundary', async () => {
+  const list = await fetch(new URL('/api/memories', baseUrl), { cache: 'no-store' });
+  assert.equal(list.status, 401);
+  assert.match(list.headers.get('cache-control') ?? '', /private, no-store/);
+  const save = await fetch(new URL('/api/memories', baseUrl), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ episodeId: 'not-an-episode' }),
+  });
+  assert.equal(save.status, 400);
+  assert.match(save.headers.get('cache-control') ?? '', /private, no-store/);
+  const remove = await fetch(new URL('/api/memories', baseUrl), {
+    method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ memoryId: 'invalid' }),
+  });
+  assert.equal(remove.status, 400);
+  assert.match(remove.headers.get('cache-control') ?? '', /private, no-store/);
+});
+
+test('saved project memory page redirects signed-out visitors to GitHub setup', async () => {
+  const response = await fetch(new URL('/workspace/connected/memory', baseUrl), { redirect: 'manual', cache: 'no-store' });
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response.headers.get('location'), baseUrl).pathname, '/setup/github');
+});
+
 test('a signed-out visitor can enter the public repository demo', async () => {
   const page = await fetch(new URL('/demo', baseUrl), { cache: 'no-store' });
   assert.equal(page.status, 200);

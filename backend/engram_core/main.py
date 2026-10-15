@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import re
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -39,6 +41,14 @@ async def principal(
 
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=500)
+
+
+class MemorySaveRequest(BaseModel):
+    episode_id: str = Field(min_length=36, max_length=36, alias="episodeId")
+
+
+class MemoryDeleteRequest(BaseModel):
+    memory_id: str = Field(min_length=36, max_length=64, alias="memoryId")
 
 
 class GraphQuery(BaseModel):
@@ -92,6 +102,99 @@ async def chat(body: ChatRequest, identity: Annotated[Principal, Depends(princip
     except Exception as error:
         print(f"Agent run failed ({type(error).__name__}): {error}")
         raise HTTPException(status_code=503, detail="The graph agent could not complete this request. Check FalkorDB and try again.") from error
+
+
+@app.get("/v1/memories")
+async def list_memories(identity: Annotated[Principal, Depends(principal)]):
+    try:
+        result = await graph_for(identity.user_id, identity.repository).query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(memory:ProjectMemory)
+          WHERE memory.userId=$userId
+          RETURN id(memory),memory.id,memory.question,memory.answer,memory.agent,memory.intent,memory.savedAt,memory.sourcesJson
+          ORDER BY memory.savedAt DESC LIMIT 100""", {"repo": identity.repository, "userId": identity.user_id})
+        items = rows(result, ["nodeId", "id", "question", "answer", "agent", "intent", "savedAt", "sourcesJson"])
+        for item in items:
+            try:
+                item["sources"] = json.loads(str(item.pop("sourcesJson", "[]")))
+            except (TypeError, ValueError):
+                item["sources"] = []
+        return {"repository": identity.repository, "items": items}
+    except Exception as error:
+        print(f"Saved memory read failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not read saved project memory.") from error
+
+
+@app.post("/v1/memories")
+async def save_memory(body: MemorySaveRequest, identity: Annotated[Principal, Depends(principal)]):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", body.episode_id):
+        raise HTTPException(status_code=400, detail="Choose a valid investigation to save.")
+    graph = graph_for(identity.user_id, identity.repository)
+    try:
+        episode_rows = rows(await graph.query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(episode:Episode {id:$episodeId})
+          WHERE episode.userId=$userId
+          RETURN episode.question,episode.answer,episode.agent,episode.intent,episode.createdAt,episode.sourcesJson""", {
+            "repo": identity.repository, "episodeId": body.episode_id, "userId": identity.user_id,
+        }), ["question", "answer", "agent", "intent", "createdAt", "sourcesJson"])
+        if not episode_rows:
+            raise HTTPException(status_code=404, detail="This investigation is no longer available in this repository.")
+        episode = episode_rows[0]
+        try:
+            sources = json.loads(str(episode.get("sourcesJson", "[]")))
+        except (TypeError, ValueError):
+            sources = []
+        if not isinstance(sources, list) or not sources:
+            raise HTTPException(status_code=409, detail="Only an investigation with source evidence can be saved.")
+        sources = [source for source in sources[:6] if isinstance(source, dict) and re.match(r"^https://github\.com/", str(source.get("url", "")))]
+        if not sources:
+            raise HTTPException(status_code=409, detail="This investigation has no GitHub sources to preserve.")
+
+        memory_id = f"memory-{body.episode_id}"
+        await graph.query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(episode:Episode {id:$episodeId})
+          WHERE episode.userId=$userId
+          MERGE (memory:ProjectMemory {id:$memoryId})
+          SET memory.userId=$userId,memory.repository=$repo,memory.question=episode.question,
+            memory.answer=episode.answer,memory.agent=episode.agent,memory.intent=episode.intent,
+            memory.savedAt=$savedAt,memory.sourcesJson=$sourcesJson,memory.title=substring(episode.question,0,160)
+          MERGE (repo)-[:HAS_MEMORY]->(memory)
+          MERGE (memory)-[:PRESERVES]->(episode)""", {
+            "repo": identity.repository, "episodeId": body.episode_id, "userId": identity.user_id,
+            "memoryId": memory_id, "savedAt": datetime.now(timezone.utc).isoformat(),
+            "sourcesJson": json.dumps(sources, ensure_ascii=False),
+        })
+        for source in sources:
+            await graph.query("""MATCH (memory:ProjectMemory {id:$memoryId})
+              MATCH (record {url:$url})
+              MERGE (memory)-[grounded:GROUNDED_IN]->(record)
+              SET grounded.title=$title,grounded.role=$role""", {
+                "memoryId": memory_id, "url": source["url"], "title": str(source.get("title", "GitHub source"))[:200],
+                "role": str(source.get("role", "Evidence"))[:80],
+            })
+        return {"saved": True, "id": memory_id, "repository": identity.repository, "sources": sources}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Saved memory write failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not save this investigation to FalkorDB.") from error
+
+
+@app.delete("/v1/memories")
+async def delete_memory(body: MemoryDeleteRequest, identity: Annotated[Principal, Depends(principal)]):
+    if not re.fullmatch(r"memory-[0-9a-fA-F-]{36}", body.memory_id):
+        raise HTTPException(status_code=400, detail="Choose a valid saved memory.")
+    try:
+        result = await graph_for(identity.user_id, identity.repository).query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(memory:ProjectMemory {id:$memoryId})
+          WHERE memory.userId=$userId
+          WITH memory DETACH DELETE memory RETURN 1""", {
+            "repo": identity.repository, "memoryId": body.memory_id, "userId": identity.user_id,
+        })
+        deleted = rows(result, ["deleted"])
+        if not deleted or not deleted[0].get("deleted"):
+            raise HTTPException(status_code=404, detail="Saved memory not found in this repository.")
+        return {"deleted": True, "id": body.memory_id}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Saved memory delete failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not remove saved project memory.") from error
 
 
 @app.post("/v1/guest/chat")
@@ -179,7 +282,7 @@ async def guest_explore(identity: Annotated[Principal, Depends(principal)], node
             data = []
             # Sample each useful relationship class so a busy repository does not
             # let commits crowd every contributor and pull request off the canvas.
-            for label, limit in (("Contributor", 20), ("WorkItem", 24), ("Commit", 12), ("RepositoryBranch", 5)):
+            for label, limit in (("Contributor", 20), ("WorkItem", 24), ("Commit", 12), ("RepositoryBranch", 5), ("ProjectMemory", 12)):
                 cypher = f"""MATCH (focus:Repository {{fullName:$repo}})-[r]-(other:{label})
                 WITH focus,r,other ORDER BY coalesce(other.updatedAt,other.createdAt,other.date,other.latestCommitAt,other.submittedAt,'') DESC LIMIT {limit}
                 RETURN id(focus),labels(focus),properties(focus),id(other),labels(other),properties(other),type(r),properties(r)"""

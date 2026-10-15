@@ -71,13 +71,13 @@ async def expertise_lookup(user_id: str, repository: str, term: str) -> dict:
     MATCH (person:Contributor)-[:SUBMITTED]->(review:Review)-[:ON_PR]->(item)
     WHERE review.state <> 'DISMISSED'
     OPTIONAL MATCH (item)-[:MODIFIES]->(file:File)
-    WITH person,item,file WHERE $term = '' OR toLower(item.title) CONTAINS $term
-      OR toLower(coalesce(item.body,'')) CONTAINS $term OR toLower(coalesce(file.path,'')) CONTAINS $term
+    WITH person,item,file WHERE $term = '' OR any(word IN $terms WHERE toLower(item.title) CONTAINS word
+      OR toLower(coalesce(item.body,'')) CONTAINS word OR toLower(coalesce(file.path,'')) CONTAINS word)
     WITH person,count(DISTINCT item) AS relevantReviews,
       collect(DISTINCT {title:item.title,url:item.url,number:item.number})[0..5] AS evidence,
       collect(DISTINCT file.path)[0..8] AS files
     RETURN person.login,relevantReviews,evidence,files ORDER BY relevantReviews DESC,person.login ASC LIMIT 8"""
-    params = {"repo": repository, "term": term}
+    params = {"repo": repository, "term": term, "terms": [word for word in term.split() if word]}
     records = rows(await _scope(locals()).query(cypher, params), ["login", "relevantReviews", "evidence", "files"])
     return {"records": records, "cypher": cypher, "params": params}
 
@@ -88,12 +88,13 @@ async def decision_trace(user_id: str, repository: str, term: str) -> dict:
     cypher = """MATCH (repo:Repository {fullName:$repo})-[:HAS_ITEM]->(item:WorkItem)
     OPTIONAL MATCH (comment:Comment)-[:ON_ITEM]->(item)
     WITH item,collect(DISTINCT {body:comment.body,url:comment.url,createdAt:comment.createdAt})[0..5] AS discussion
-    WHERE toLower(item.title) CONTAINS $term OR toLower(coalesce(item.body,'')) CONTAINS $term
-      OR any(entry IN discussion WHERE toLower(coalesce(entry.body,'')) CONTAINS $term)
+    WHERE any(word IN $terms WHERE toLower(item.title) CONTAINS word
+      OR toLower(coalesce(item.body,'')) CONTAINS word
+      OR any(entry IN discussion WHERE toLower(coalesce(entry.body,'')) CONTAINS word))
     RETURN item.title,item.kind,item.number,item.state,item.url,item.updatedAt,
       substring(coalesce(item.body,''),0,600) AS context,discussion
     ORDER BY item.updatedAt DESC LIMIT 8"""
-    params = {"repo": repository, "term": term}
+    params = {"repo": repository, "term": term, "terms": [word for word in term.split() if word]}
     records = rows(await _scope(locals()).query(cypher, params), ["title", "kind", "number", "state", "url", "updatedAt", "context", "discussion"])
     return {"records": records, "cypher": cypher, "params": params}
 
@@ -103,12 +104,12 @@ async def contributor_activity(user_id: str, repository: str, term: str) -> dict
     """Show recent imported commits by contributors."""
     cypher = """MATCH (repo:Repository {fullName:$repo})-[:HAS_COMMIT]->(commit:Commit)
     MATCH (person:Contributor)-[:AUTHORED]->(commit)
-    WHERE $term = '' OR toLower(commit.message) CONTAINS $term OR toLower(person.login) CONTAINS $term
+    WHERE $term = '' OR any(word IN $terms WHERE toLower(commit.message) CONTAINS word OR toLower(person.login) CONTAINS word)
     WITH person,count(DISTINCT commit) AS commitsAuthored,max(commit.date) AS latestCommitAt,
       collect(DISTINCT {sha:commit.sha,message:commit.message,url:commit.url,date:commit.date})[0..5] AS evidence
     RETURN person.login,commitsAuthored,latestCommitAt,evidence
     ORDER BY commitsAuthored DESC,latestCommitAt DESC,person.login ASC LIMIT 8"""
-    params = {"repo": repository, "term": term}
+    params = {"repo": repository, "term": term, "terms": [word for word in term.split() if word]}
     records = rows(await _scope(locals()).query(cypher, params), ["login", "commitsAuthored", "latestCommitAt", "evidence"])
     return {"records": records, "cypher": cypher, "params": params}
 
@@ -117,7 +118,7 @@ async def contributor_activity(user_id: str, repository: str, term: str) -> dict
 async def repository_search(user_id: str, repository: str, term: str, number: int) -> dict:
     """Search imported pull requests and issues by number or matching text."""
     cypher = """MATCH (repo:Repository {fullName:$repo})-[:HAS_ITEM]->(item:WorkItem)
-    WHERE toLower(item.title) CONTAINS $term OR toLower(coalesce(item.body,'')) CONTAINS $term
+    WHERE any(word IN $terms WHERE toLower(item.title) CONTAINS word OR toLower(coalesce(item.body,'')) CONTAINS word)
       OR ($number > 0 AND item.number=$number)
     OPTIONAL MATCH (person:Contributor)-[:OPENED]->(item)
     OPTIONAL MATCH (item)-[:MODIFIES]->(file:File)
@@ -126,7 +127,7 @@ async def repository_search(user_id: str, repository: str, term: str, number: in
       collect(DISTINCT person.login)[0..5] AS contributors,collect(DISTINCT file.path)[0..5] AS files,
       collect(DISTINCT reviewer.login)[0..5] AS reviewers
     ORDER BY item.updatedAt DESC LIMIT 8"""
-    params = {"repo": repository, "term": term, "number": number}
+    params = {"repo": repository, "term": term, "terms": [word for word in term.split() if word], "number": number}
     records = rows(await _scope(locals()).query(cypher, params), ["title", "kind", "number", "url", "state", "author", "contributors", "files", "reviewers"])
     return {"records": records, "cypher": cypher, "params": params}
 
@@ -337,12 +338,17 @@ async def load_memory(state: AgentState) -> dict:
     if not state.get("remember", True):
         return {"memories": []}
     graph = graph_for(state["user_id"], state["repository"])
-    result = await graph.query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(episode:Episode)
-      WHERE episode.userId=$userId RETURN episode.question,episode.answer,episode.agent,episode.intent,episode.createdAt
-      ORDER BY episode.createdAt DESC LIMIT 12""", {"repo": state["repository"], "userId": state["user_id"]})
-    memories = rows(result, ["question", "answer", "agent", "intent", "createdAt"])
-    words = [word for word in state["prompt"].lower().split() if len(word) > 4]
-    matches = [item for item in memories if item.get("intent") == state["intent"] or any(word in str(item.get("question", "")).lower() for word in words)]
+    result = await graph.query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(memory:ProjectMemory)
+      WHERE memory.userId=$userId
+      RETURN memory.question,memory.answer,memory.agent,memory.intent,memory.savedAt,memory.sourcesJson
+      ORDER BY memory.savedAt DESC LIMIT 30""", {"repo": state["repository"], "userId": state["user_id"]})
+    memories = rows(result, ["question", "answer", "agent", "intent", "savedAt", "sourcesJson"])
+    words = [word for word in clean_term(state["prompt"]).split() if len(word) > 3]
+    matches = [item for item in memories if any(word in f"{item.get('question', '')} {item.get('answer', '')}".lower() for word in words)]
+    # If the prompt has no useful topic words, offer the latest saved note as
+    # context; unrelated notes are not injected into a topic-specific answer.
+    if not words:
+        matches = memories[:1]
     return {"memories": matches[:3]}
 
 
@@ -355,8 +361,18 @@ async def ground_and_remember(state: AgentState) -> dict:
     draft = _draft(state["intent"], records, number, term)
     memories = state.get("memories", [])
     if memories:
-        draft += f" This also relates to a previous question in this workspace: “{str(memories[0].get('question', ''))[:160]}”."
+        draft += f" A user-saved project memory from an earlier investigation also matches: “{str(memories[0].get('answer', ''))[:240]}”. Treat this as prior context, not as a substitute for the current graph evidence."
     sources = _sources(state["intent"], records, number)
+    for memory in memories:
+        try:
+            saved_sources = json.loads(str(memory.get("sourcesJson", "[]")))
+        except (TypeError, ValueError):
+            saved_sources = []
+        if isinstance(saved_sources, list):
+            for source in saved_sources:
+                if isinstance(source, dict) and source.get("url") and source["url"] not in {item["url"] for item in sources}:
+                    sources.append({**source, "id": len(sources) + 1, "role": f"Saved memory · {source.get('role', 'source')}"})
+    sources = sources[:6]
     answer, mode = await _synthesize(state["prompt"], state["repository"], draft, sources)
     if not state.get("remember", True):
         return {"answer": answer, "answer_mode": mode, "sources": sources, "episode_id": ""}
@@ -369,12 +385,13 @@ async def ground_and_remember(state: AgentState) -> dict:
       MERGE (retriever)-[handoff:HANDED_OFF_TO]->(agent) SET handoff.lastUsedAt=$createdAt,handoff.intent=$intent
       MERGE (episode:Episode {id:$episodeId}) SET episode.userId=$userId,episode.question=$question,
         episode.answer=$answer,episode.agent=$agentName,episode.intent=$intent,episode.createdAt=$createdAt,
-        episode.evidenceCount=$evidenceCount,episode.repository=$repo
+        episode.evidenceCount=$evidenceCount,episode.repository=$repo,episode.sourcesJson=$sourcesJson
       MERGE (repo)-[memory:HAS_MEMORY]->(episode) SET memory.createdAt=$createdAt,memory.agent=$agentName
       MERGE (agent)-[authored:WROTE]->(episode) SET authored.createdAt=$createdAt,authored.evidenceCount=$evidenceCount""", {
         "repo": state["repository"], "intent": state["intent"], "agentName": state["agent_name"],
         "episodeId": episode_id, "userId": state["user_id"], "question": state["prompt"],
         "answer": answer, "createdAt": created_at, "evidenceCount": len(records),
+        "sourcesJson": json.dumps(sources, ensure_ascii=False),
     })
     await graph.query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(episode:Episode)
       WHERE episode.userId=$userId WITH episode ORDER BY episode.createdAt DESC SKIP 100 DETACH DELETE episode""",
