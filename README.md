@@ -4,7 +4,7 @@ Engram turns GitHub repository activity into a graph-backed project memory. Peop
 
 ## Run locally
 
-Requirements: Node.js 22+, a persistent FalkorDB instance, and a GitHub App for user-connected repositories. Set `OPENAI_API_KEY` to enable natural-language answer synthesis; graph retrieval and deterministic answers continue to work without it.
+Requirements: Node.js 22+, a persistent FalkorDB instance, a GitHub App for user-connected repositories, and a Gemini API key for natural-language synthesis. Graph retrieval and deterministic answers still work if Gemini is unavailable.
 
 ```sh
 npm install
@@ -23,7 +23,7 @@ Vercel Hobby is a poor fit for the full stack: its cron jobs run at most daily a
 
 1. Provision an Ubuntu OCI A1 VM, attach the public IP to a DNS name, and open only SSH, HTTP, and HTTPS in the cloud firewall. Do not expose port 6379.
 2. Install Docker Engine and Compose on the VM, clone this repository, and copy `.env.production.example` to `.env.production`.
-3. Set a random hex `FALKORDB_PASSWORD` and `SESSION_SECRET`, enter the GitHub App credentials, and add an `OPENAI_API_KEY` if AI answer synthesis is wanted. Configure the GitHub App callback and setup URLs with `https://<your-domain>/api/github/auth/callback` and `https://<your-domain>/api/github/callback`.
+3. Set a random hex `FALKORDB_PASSWORD` and `SESSION_SECRET`, enter the GitHub App credentials, and set `GEMINI_API_KEY` plus `GEMINI_MODEL=gemini-3.1-flash-lite` for answer synthesis. Configure the GitHub App callback and setup URLs with `https://<your-domain>/api/github/auth/callback` and `https://<your-domain>/api/github/callback`.
 4. Point the domain to the VM and run `docker compose --env-file .env.production -f docker-compose.production.yml up -d --build`. Caddy obtains and renews HTTPS certificates. FalkorDB has authentication, append-only persistence, a named data volume, and no public port.
 5. Pin `FALKORDB_IMAGE` to a version tested by your deployment before inviting users. Set a recurring off-instance backup and test restore before storing data you cannot afford to lose.
 
@@ -31,7 +31,7 @@ The graph is served from the last successful snapshot while a GitHub refresh is 
 
 The GitHub App needs read-only **Metadata**, **Issues**, **Pull requests**, and **Contents** repository permissions. Contents access is used for commit history; the rest of the sync continues with a warning if that permission is unavailable. Configure the user callback as `http://localhost:3000/api/github/auth/callback` and the installation setup URL as `http://localhost:3000/api/github/callback`. Do not enable “Request user authorization during installation”; Engram has a separate PKCE sign-in step. Install the app only on repositories you choose.
 
-For a deployed instance, register the production callback and setup URLs on the GitHub App, use HTTPS, provide a stable `SESSION_SECRET`, and set the FalkorDB URL to a private network endpoint with authentication/TLS where supported. Configure `OPENAI_API_KEY` and optionally `OPENAI_MODEL` on the server to turn on natural-language answer synthesis. Engram sends the user question plus up to 12 bounded graph results and source links to that configured OpenAI account; requests set `store: false`. Without an LLM key, the graph tools still query FalkorDB and return their deterministic evidence summary. The answer panel indicates which mode produced the answer.
+For a deployed instance, register the production callback and setup URLs on the GitHub App, use HTTPS, provide a stable `SESSION_SECRET`, and set the FalkorDB URL to a private network endpoint with authentication/TLS where supported. Set `GEMINI_API_KEY` and `GEMINI_MODEL` on the server for hosted answer synthesis. Engram runs a parameterized FalkorDB query first, then sends a bounded set of graph records and source links plus the graph-derived draft to Gemini. The model must cite supplied source IDs; invalid citations or provider errors fall back to the deterministic graph answer. The answer panel labels Gemini synthesis or graph fallback and reports how many graph records and links support it. Only bounded evidence for the selected repository question is sent to Gemini; do not use this provider mode for repository data you do not want sent to Google.
 
 FalkorDB uses the Redis protocol at `redis://localhost:6379`; its optional browser UI is on `http://localhost:3001`. The project overview reports when the latest import completed and the newest activity timestamp found.
 
@@ -54,9 +54,9 @@ Edges encode repository membership, authorship, opened work, submitted reviews, 
 
 ## Agents and track coverage
 
-- **Connected-data agent work:** Reviewer Router follows a target PR’s changed files to previous PRs, then through their reviews to contributors. It ranks matches by shared files and related reviews, returns evidence links, and shows the parameterized Cypher.
-- **Agent memory and coordination:** Context Retriever hands evidence to Reviewer Router, Expertise Finder, Decision Trace, or Project Guide. Follow-up questions can retrieve matching past episodes from the user’s private repository graph. The graph keeps the latest 100 episodes per repository.
-- **Company/project brain:** the graph joins contributors, PRs, issues, comments, reviews, changed files, and commits. Expertise results are based on observed review activity. Decision Trace surfaces matching source discussions; it does not claim that every merged PR is a formally approved decision.
+- **Track 01 · Agents That Act on Connected Data:** Reviewer Router follows a target PR’s changed files to previous PRs, then through their reviews to contributors. It ranks matches by shared files and related reviews, returns evidence links, and shows the parameterized Cypher. The decision is recorded as a private graph episode and handed to the selected specialist. Reviewer ranking requires a repository import with PR, review, and file history; the current `Sanket17052006/openlibrary` demo fork contains commits but no imported PR/review history, so it cannot demonstrate a non-empty reviewer ranking until a history-rich repo is selected.
+- **Track 02 · Agent Memory and Coordination:** Context Retriever hands evidence to Reviewer Router, Expertise Finder, Decision Trace, or Project Guide. Question/answer episodes, agent identity, evidence count, timestamp, and handoff are persisted in each user's private repository graph; follow-up questions can retrieve prior episodes. The graph keeps the latest 100 episodes per user/repository.
+- **Track 03 · Company Brain:** the graph joins contributors, PRs, issues, comments, reviews, changed files, commits, and decisions/discussions when present. Expertise results are based on observed review activity. Decision Trace surfaces matching source discussions; it does not claim that every merged PR is a formally approved decision. Answers include source links and the Cypher query. Import freshness is bounded by the configured recent windows and GitHub rate limits.
 
 ## Freshness and import bounds
 
