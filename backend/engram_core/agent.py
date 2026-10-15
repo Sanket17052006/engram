@@ -35,6 +35,7 @@ class AgentState(TypedDict, total=False):
     cypher: str
     params: dict
     planner: str
+    remember: bool
 
 
 mcp = FastMCP("Engram FalkorDB Graph Tools")
@@ -333,6 +334,8 @@ async def _synthesize(prompt: str, repository: str, draft: str, sources: list[di
 
 
 async def load_memory(state: AgentState) -> dict:
+    if not state.get("remember", True):
+        return {"memories": []}
     graph = graph_for(state["user_id"], state["repository"])
     result = await graph.query("""MATCH (repo:Repository {fullName:$repo})-[:HAS_MEMORY]->(episode:Episode)
       WHERE episode.userId=$userId RETURN episode.question,episode.answer,episode.agent,episode.intent,episode.createdAt
@@ -355,6 +358,8 @@ async def ground_and_remember(state: AgentState) -> dict:
         draft += f" This also relates to a previous question in this workspace: “{str(memories[0].get('question', ''))[:160]}”."
     sources = _sources(state["intent"], records, number)
     answer, mode = await _synthesize(state["prompt"], state["repository"], draft, sources)
+    if not state.get("remember", True):
+        return {"answer": answer, "answer_mode": mode, "sources": sources, "episode_id": ""}
     episode_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
     graph = graph_for(state["user_id"], state["repository"])
@@ -390,8 +395,8 @@ builder.add_edge("ground_and_remember", END)
 agent_graph = builder.compile()
 
 
-async def ask(user_id: str, login: str, repository: str, prompt: str) -> dict:
-    output = await agent_graph.ainvoke({"user_id": user_id, "login": login, "repository": repository, "prompt": prompt})
+async def ask(user_id: str, login: str, repository: str, prompt: str, remember: bool = True) -> dict:
+    output = await agent_graph.ainvoke({"user_id": user_id, "login": login, "repository": repository, "prompt": prompt, "remember": remember})
     tool_result = output["tool_result"]
     intent = output["intent"]
     agent_name = output["agent_name"]

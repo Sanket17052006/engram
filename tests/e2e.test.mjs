@@ -73,3 +73,31 @@ test('graph and node APIs require an authenticated selected repository', async (
   assert.equal(node.status, 401);
   assert.match(node.headers.get('cache-control') ?? '', /private, no-store/);
 });
+
+test('a signed-out visitor can enter the public repository demo', async () => {
+  const page = await fetch(new URL('/demo', baseUrl), { cache: 'no-store' });
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /PUBLIC REPOSITORY EXPLORER/);
+  assert.match(html, /No GitHub sign-in required/);
+  const workspace = await fetch(new URL('/demo/vercel/next.js', baseUrl), { cache: 'no-store' });
+  assert.equal(workspace.status, 200);
+});
+
+test('guest APIs validate public repository input without requiring a GitHub session', async () => {
+  const snapshot = await fetch(new URL('/api/demo/snapshot?repository=invalid', baseUrl), { cache: 'no-store' });
+  assert.equal(snapshot.status, 400);
+  assert.match(snapshot.headers.get('cache-control') ?? '', /no-store/);
+  const graph = await fetch(new URL('/api/demo/graph?repository=bad', baseUrl), { cache: 'no-store' });
+  assert.equal(graph.status, 400);
+  const node = await fetch(new URL('/api/demo/node/1?repository=bad', baseUrl), { cache: 'no-store' });
+  assert.equal(node.status, 400);
+  const importResponse = await fetch(new URL('/api/demo/import', baseUrl), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repository: 'not-a-repository' }),
+  });
+  assert.equal(importResponse.status, 400);
+  const emptyQuestion = await fetch(new URL('/api/demo/chat', baseUrl), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repository: 'vercel/next.js', prompt: '  ' }),
+  });
+  assert.equal(emptyQuestion.status, 400);
+});

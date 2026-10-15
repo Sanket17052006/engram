@@ -94,6 +94,22 @@ async def chat(body: ChatRequest, identity: Annotated[Principal, Depends(princip
         raise HTTPException(status_code=503, detail="The graph agent could not complete this request. Check FalkorDB and try again.") from error
 
 
+@app.post("/v1/guest/chat")
+async def guest_chat(body: ChatRequest, identity: Annotated[Principal, Depends(principal)]):
+    if identity.user_id != "0" or identity.login != "guest":
+        raise HTTPException(status_code=403, detail="Guest queries must use the public repository scope.")
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Ask a question about this public repository.")
+    if not os.getenv("FALKORDB_URL"):
+        raise HTTPException(status_code=503, detail="FalkorDB is not configured")
+    try:
+        return await ask(identity.user_id, identity.login, identity.repository, prompt, remember=False)
+    except Exception as error:
+        print(f"Guest graph agent run failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="The graph agent could not complete this request. Check the public graph and try again.") from error
+
+
 def _node_label(properties: dict, kind: str, node_id: str) -> str:
     if kind == "WorkItem":
         state = "Merged" if properties.get("mergedAt") else "Open" if str(properties.get("state", "")).lower() == "open" else "Closed"
@@ -142,6 +158,63 @@ async def explore(identity: Annotated[Principal, Depends(principal)], node_id: A
     except Exception as error:
         print(f"Graph explorer query failed ({type(error).__name__}): {error}")
         raise HTTPException(status_code=503, detail="FalkorDB graph exploration failed.") from error
+
+
+@app.get("/v1/guest/graph")
+async def guest_explore(identity: Annotated[Principal, Depends(principal)], node_id: Annotated[str | None, Query(alias="nodeId")] = None):
+    if identity.user_id != "0" or identity.login != "guest":
+        raise HTTPException(status_code=403, detail="Guest graph access must use the public repository scope.")
+    if node_id and not node_id.isdigit():
+        raise HTTPException(status_code=400, detail="Choose a graph node to follow.")
+    try:
+        graph = graph_for(identity.user_id, identity.repository)
+        if node_id:
+            cypher = """MATCH (focus) WHERE id(focus)=$nodeId OPTIONAL MATCH (focus)-[r]-(other)
+            WITH focus,r,other ORDER BY CASE WHEN other IS NULL THEN 4 WHEN 'Contributor' IN labels(other) THEN 0 WHEN 'WorkItem' IN labels(other) THEN 1 WHEN 'Commit' IN labels(other) THEN 2 ELSE 3 END, coalesce(other.updatedAt,other.createdAt,other.date,other.submittedAt,'') DESC LIMIT 61
+            RETURN id(focus),labels(focus),properties(focus),id(other),labels(other),properties(other),type(r),properties(r) LIMIT 101"""
+            params = {"nodeId": int(node_id)}
+        else:
+            params = {"repo": identity.repository}
+            columns = ["focusId", "focusLabels", "focus", "otherId", "otherLabels", "other", "relation", "relationProperties"]
+            data = []
+            # Sample each useful relationship class so a busy repository does not
+            # let commits crowd every contributor and pull request off the canvas.
+            for label, limit in (("Contributor", 20), ("WorkItem", 24), ("Commit", 12), ("RepositoryBranch", 5)):
+                cypher = f"""MATCH (focus:Repository {{fullName:$repo}})-[r]-(other:{label})
+                WITH focus,r,other ORDER BY coalesce(other.updatedAt,other.createdAt,other.date,other.latestCommitAt,other.submittedAt,'') DESC LIMIT {limit}
+                RETURN id(focus),labels(focus),properties(focus),id(other),labels(other),properties(other),type(r),properties(r)"""
+                data.extend(rows(await graph.query(cypher, params), columns))
+        if node_id:
+            data = rows(await graph.query(cypher, params), ["focusId", "focusLabels", "focus", "otherId", "otherLabels", "other", "relation", "relationProperties"])
+        if not data:
+            raise HTTPException(status_code=404, detail="No indexed public connections were found. Import this repository first.")
+        first = data[0]
+        focus_id = str(first["focusId"])
+        focus_props = first.get("focus") or {}
+        focus_kind = (first.get("focusLabels") or ["Repository"])[0]
+        nodes = {focus_id: {"id": focus_id, "label": _node_label(focus_props, focus_kind, focus_id), "type": focus_kind, "properties": focus_props}}
+        edges = []
+        for index, item in enumerate(data):
+            if item.get("otherId") is None or not item.get("relation"):
+                continue
+            other_id = str(item["otherId"])
+            properties = item.get("other") or {}
+            kind = (item.get("otherLabels") or ["Node"])[0]
+            nodes.setdefault(other_id, {"id": other_id, "label": _node_label(properties, kind, other_id), "type": kind, "properties": properties})
+            edges.append({"id": f"edge-{index}", "source": focus_id, "target": other_id, "type": item["relation"], "properties": item.get("relationProperties") or {}})
+        return {"nodes": list(nodes.values()), "edges": edges, "focus": {"id": focus_id, "label": nodes[focus_id]["label"], "type": focus_kind}, "meta": {"source": "falkordb", "repository": identity.repository, "mode": "repository-overview" if not node_id else "neighborhood", "truncated": len(data) > 60}}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Guest graph explorer query failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="FalkorDB graph exploration failed.") from error
+
+
+@app.get("/v1/guest/node/{node_id}")
+async def guest_node_detail(node_id: str, identity: Annotated[Principal, Depends(principal)]):
+    if identity.user_id != "0" or identity.login != "guest":
+        raise HTTPException(status_code=403, detail="Guest node access must use the public repository scope.")
+    return await node_detail(node_id, identity)
 
 
 @app.get("/v1/node/{node_id}")
