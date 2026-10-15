@@ -2,10 +2,16 @@ import { NextResponse } from 'next/server';
 import { normalizeRepository, PublicGithubError, requirePublicRepository } from '@/lib/public-github';
 
 export function demoJson(body:unknown,status=200){const response=NextResponse.json(body,{status});response.headers.set('Cache-Control','private, no-store, max-age=0');return response;}
-export async function validatedPublicRepository(input:unknown){
+/** Normalize a guest repository identifier without spending GitHub API quota on graph reads. */
+export function normalizedPublicRepository(input:unknown){
   const repository=normalizeRepository(input);
-  if(!repository) return {repository:null,response:demoJson({error:'Enter a GitHub public repository as owner/name or a GitHub URL.'},400)};
-  try{const details=await requirePublicRepository(repository);return {repository:details.full_name,response:null};}
+  if(!repository)return {repository:null,response:demoJson({error:'Enter a GitHub public repository as owner/name or a GitHub URL.'},400)};
+  return {repository,response:null};
+}
+export async function validatedPublicRepository(input:unknown){
+  const normalized=normalizedPublicRepository(input);
+  if(normalized.response)return normalized;
+  try{const details=await requirePublicRepository(normalized.repository!);return {repository:details.full_name,response:null};}
   catch(error){
     const status=error instanceof PublicGithubError?error.status:503;
     const message=error instanceof PublicGithubError?error.message:'Could not verify the repository with GitHub.';

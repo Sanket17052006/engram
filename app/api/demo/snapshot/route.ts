@@ -1,10 +1,10 @@
-import { demoJson, guestRateLimited, requestIp, validatedPublicRepository } from '@/lib/demo-api';
+import { demoJson, guestRateLimited, normalizedPublicRepository, requestIp } from '@/lib/demo-api';
 import { isFalkorConfigured } from '@/lib/falkordb';
 import { readPublicSnapshot } from '@/lib/public-importer';
 import { checkGuestReadRateLimit } from '@/lib/public-github';
 export const runtime='nodejs';
 export async function GET(request:Request){
-  const checked=await validatedPublicRepository(new URL(request.url).searchParams.get('repository'));
+  const checked=normalizedPublicRepository(new URL(request.url).searchParams.get('repository'));
   if(checked.response)return checked.response;
   const limit=checkGuestReadRateLimit(requestIp(request));if(!limit.allowed)return guestRateLimited(limit.retryAfterSeconds);
   if(!isFalkorConfigured())return demoJson({error:'The public demo graph is not configured.'},503);

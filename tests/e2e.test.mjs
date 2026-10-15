@@ -79,9 +79,16 @@ test('a signed-out visitor can enter the public repository demo', async () => {
   assert.equal(page.status, 200);
   const html = await page.text();
   assert.match(html, /PUBLIC REPOSITORY EXPLORER/);
-  assert.match(html, /No GitHub sign-in required/);
+  assert.match(html, /Public repositories only/);
+  assert.match(html, /No sign in/);
   const workspace = await fetch(new URL('/demo/vercel/next.js', baseUrl), { cache: 'no-store' });
   assert.equal(workspace.status, 200);
+});
+
+test('guest graph snapshots do not spend GitHub visibility-check quota', async () => {
+  const { response, data } = await getJson('/api/demo/snapshot?repository=vercel%2Fnext.js', { cache: 'no-store' });
+  assert.notEqual(response.status, 403);
+  assert.doesNotMatch(data.error ?? '', /GitHub public API rate limit reached/i);
 });
 
 test('guest APIs validate public repository input without requiring a GitHub session', async () => {

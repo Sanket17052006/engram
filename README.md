@@ -92,6 +92,8 @@ Relationships represent repository membership, authorship, assignment, requested
 4. The graph uses the reserved guest identity (`user id 0`) and a repository-specific graph name, separated from every positive GitHub user ID graph. The workspace reuses overview, activity, chat, graph exploration, and node detail pages.
 5. Guest chat invokes the same Python LangGraph workflow and MCP graph tools, but skips prior memory retrieval and `Episode` writes. The graph begins at the repository node, so it cannot claim “my connections.”
 
+GitHub is checked when a public repository is imported or refreshed. After import, guest overview, graph, node, and question requests read the stored FalkorDB graph directly and do not consume GitHub API quota.
+
 The importer makes a bounded number of unauthenticated GitHub requests, caches successful imports briefly, and applies best-effort per-process limits of three fresh imports per IP per hour, 120 graph reads per minute, and eight guest chat requests per ten minutes. These in-memory limits protect a single demo instance; use a shared rate limiter for multiple replicas. GitHub’s public API quota is shared with other anonymous traffic. For sustained hosted traffic, configure a shared rate limiter and queue before increasing import depth.
 
 ## Sign-in and data boundaries
