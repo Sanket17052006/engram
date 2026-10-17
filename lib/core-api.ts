@@ -8,7 +8,7 @@ export async function coreRequest(path: string, init: RequestInit = {}) {
   return coreRequestForSession(path, session, init);
 }
 
-export async function coreRequestForSession(path: string, session: GithubSession, init: RequestInit = {}) {
+export async function coreRequestForSession(path: string, session: GithubSession, init: RequestInit = {}, timeoutMs = 60_000) {
   const base = process.env.ENGRAM_CORE_URL?.replace(/\/$/, '');
   const key = process.env.ENGRAM_INTERNAL_API_KEY;
   if (!base || !key) return privateJson({ error: 'The Python agent core is not configured. Set ENGRAM_CORE_URL and ENGRAM_INTERNAL_API_KEY.' }, { status: 503 });
@@ -16,7 +16,7 @@ export async function coreRequestForSession(path: string, session: GithubSession
     const response = await fetch(`${base}${path}`, {
       ...init,
       cache: 'no-store',
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         ...(init.headers ?? {}),
         'X-Engram-Core-Key': key,

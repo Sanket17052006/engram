@@ -32,6 +32,14 @@ The graph explorer makes that reasoning inspectable. **All** shows the connected
 
 For a short recording, show the public-repository import, the reviewer question, the evidence-backed result, then open the graph and filter to **Reviews** or **Reviewers**. This demonstrates why the graph matters: the recommendation is supported by a path from changed files through prior work and review activity, rather than a keyword match alone. No GitHub write or maintainer action is part of this flow.
 
+## Demo walkthrough: prepare a graph-guided issue repair
+
+For a signed-in repository, open **Code graph**, refresh its current GitHub issues, import the current default-branch source snapshot, choose an issue, then select **Fix selected issue**. Engram asks the authenticated FastAPI investigator to query the user-and-repository-scoped FalkorDB graph, follows stored code, import, symbol, and linked-test relationships, and sends the selected issue plus bounded graph-selected source snippets to the configured model to propose a focused patch. It fetches the latest upstream `master` (or the selected repository's current default branch when no upstream exists), creates an active `engram/issue-*` branch directly in the configured local checkout, applies the patch, runs only graph-linked targeted tests, and commits only when those tests pass. If the checkout has local edits, Engram first preserves them in a recoverable Git stash. The review page shows the issue, summary, branch/base commit, changed files, diff, test output, and a link to a separate FalkorDB trace page. The approval control is a review affordance only in this local demo; no GitHub pull request is created and nothing is pushed.
+
+Set `OPENLIBRARY_REPAIR_CHECKOUT` and `ENGRAM_REPAIR_ROOT` in `.env.local` as described below. After a repair, `git branch --show-current` in that checkout shows the active issue branch. If Engram stashed pre-existing changes, inspect `git stash list`; the stash is retained for explicit recovery and is not dropped automatically. Review the generated patch and test result critically; an LLM-proposed fix is not proof of correctness.
+
+See [the 3–4 minute demo script](docs/DEMO_SCRIPT.md) for the click path and narration.
+
 ## How the agent works
 
 ```mermaid
@@ -87,6 +95,8 @@ Parameterized Cypher traversals find the connected records and calculate evidenc
 | Review graph paths and source records | Cypher trace, source links, neighborhood explorer, node detail |
 | Filter and follow graph connections | FalkorDB-backed All, PR, issue, review, reviewer, assignee, commit, comment, file, contributor, and label views |
 | Remember an investigation across sessions | `Episode` nodes, user-saved `ProjectMemory` nodes, `HAS_MEMORY`, `PRESERVES`, and `GROUNDED_IN` relationships |
+| Import source structure for issue repair | Current GitHub default-branch snapshot, parsed into `CodeFile`, `CodeSymbol`, and `TestFile` nodes with `IMPORTS`, `DEFINES`, and graph-linked `TESTS` edges in FalkorDB |
+| Prepare a local issue repair | Graph-linked investigator, bounded model patch generation, active issue branch in the configured checkout, focused checks, local commit, diff review, and a separate graph trace page |
 | Use natural phrasing when configured | Optional Gemini tool selection and constrained graph-grounded synthesis |
 
 ## Architecture
@@ -152,6 +162,8 @@ openssl rand -hex 32
 
 Use the generated value as `SESSION_SECRET`, and create a different random `ENGRAM_INTERNAL_API_KEY`. Configure the GitHub App values in `.env.local`; never commit that file or the downloaded private key. For local development on port `3100`, configure the user callback as `http://localhost:3100/api/github/auth/callback` and the App setup URL as `http://localhost:3100/api/github/callback`.
 
+For local issue repair, set `ENGRAM_REPAIR_CHECKOUTS` to map an exact `owner/repo` name to a local checkout, and set `ENGRAM_REPAIR_ROOT` to a separate private directory for repair run manifests and patches. Repair and test execution are disabled unless the exact repository is listed in `ENGRAM_REPAIR_ALLOWED_REPOSITORIES` and `ENGRAM_ALLOW_UNSANDBOXED_REPAIR_TESTS=true` is explicitly set. This feature executes repository test code on the local host and is intended only for trusted checkouts; it is not a sandbox for arbitrary public repositories. Engram changes branches only after a model has produced a validated patch. Existing checkout edits are stashed with `--include-untracked` and retained for recovery.
+
 Start FalkorDB and the agent core:
 
 ```sh
@@ -181,3 +193,5 @@ The browser-level checks cover key setup and OAuth routes, guest access boundari
 Engram uses deterministic Cypher builders for explainable, bounded graph access. This is easier to audit than unrestricted text-to-Cypher, though it limits the range of questions. Gemini improves tool selection and phrasing but is optional and receives bounded graph-derived context when enabled. Imports are recent snapshots rather than a full archive; a public multi-replica deployment should add a shared rate limiter, background sync queue, and webhook-driven updates before increasing import depth.
 
 Repository activity is read-only; saving project memory is an explicit action within the user's private Engram graph.
+
+Code repair is a separate opt-in action. The selected issue, graph evidence, and a bounded set of graph-selected source and test snippets are sent to the configured model provider. Engram validates the returned diff and targeted tests before it keeps a local branch and commit in the configured checkout; existing local changes are preserved in a recoverable stash. A successful run must be described from its actual model and test output. The demo does not push or create a GitHub pull request.

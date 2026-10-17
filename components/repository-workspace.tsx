@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { BrandMark } from '@/components/brand-mark';
-import { Activity, ArrowRight, BookmarkCheck, Brain, Database, GitCommit, GitPullRequest, Github, LoaderCircle, MessageSquareText, Network, Search, ShieldCheck, Trash2, X } from 'lucide-react';
+import { readUserModelConfig } from '@/lib/byo-model';
+import { Activity, ArrowRight, BookmarkCheck, Brain, Database, FileCode2, GitCommit, GitPullRequest, Github, LoaderCircle, MessageSquareText, Network, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 
 type Item = { number: number; title: string; state: string; url: string; author: string; comments: number; updated_at:string };
 type Commit = {sha:string;message:string;url:string;authorLogin:string;authorName:string;date:string};
@@ -32,7 +33,7 @@ export function RepositoryWorkspace({view='overview',guestRepository}:{view?:Wor
   const [evidence, setEvidence] = useState<Source[]>([]);
   const [cypher, setCypher] = useState('');
   const [querySource, setQuerySource] = useState('');
-  const [answerMode, setAnswerMode] = useState<'gemini' | 'graph-template' | ''>('');
+  const [answerMode, setAnswerMode] = useState<string>('');
   const [evidenceCounts, setEvidenceCounts] = useState({recordCount:0,sourceCount:0});
   const [agent, setAgent] = useState('');
   const [memoryCount, setMemoryCount] = useState(0);
@@ -59,6 +60,7 @@ export function RepositoryWorkspace({view='overview',guestRepository}:{view?:Wor
   async function checkAccount(){try{const response=await fetch('/api/github/status',{cache:'no-store'});const status=await response.json();setSignedIn(status.user?.login??'');if(status.selectedRepo){setSelectedRepo(status.selectedRepo);await readCache(status.selectedRepo)}}catch{}}
   useEffect(()=>{if(isGuest){setSelectedRepo(guestRepository??'');void load(guestRepository??'',false)}else void checkAccount()},[]);
   useEffect(()=>{if(view==='memory'&&!isGuest){void readMemories()}},[view,isGuest]);
+  useEffect(()=>{if(view==='ask'){const initialPrompt=new URLSearchParams(window.location.search).get('prompt');if(initialPrompt)setPrompt(initialPrompt)}},[view]);
 
   async function readMemories(){
     try{const response=await fetch('/api/memories',{cache:'no-store'});const result=await response.json();if(!response.ok)throw new Error(result.error??'Could not load saved memory.');setSavedMemories(result.items??[])}
@@ -88,8 +90,10 @@ export function RepositoryWorkspace({view='overview',guestRepository}:{view?:Wor
     setBusy(true); setAsking(true); setError('');
     try {
       setPrompt(question);
-      const selectedTargetNumber=Number(briefPr||data?.pulls[0]?.number||0);
-      const response = await fetch(isGuest?'/api/demo/chat':'/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(isGuest?{ prompt: question, repository: guestRepository,targetNumber:selectedTargetNumber }:{ prompt: question,targetNumber:selectedTargetNumber }) });
+      const issueNumber=question.match(/\bissue\s+#(\d+)/i)?.[1];
+      const selectedTargetNumber=Number(issueNumber||briefPr||data?.pulls[0]?.number||0);
+      const modelConfig=isGuest?null:readUserModelConfig();
+      const response = await fetch(isGuest?'/api/demo/chat':'/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(isGuest?{ prompt: question, repository: guestRepository,targetNumber:selectedTargetNumber }:{ prompt: question,targetNumber:selectedTargetNumber,...(modelConfig?{modelConfig}:{}) }) });
       const result = await response.json(); if (!response.ok) throw Error(result.error);
       setQuerySource(result.source); setAnswerMode(result.answerMode ?? 'graph-template'); setEvidenceCounts(result.evidence ?? {recordCount:result.rows?.length??0,sourceCount:result.sources?.length??0}); setCypher(result.cypher ?? ''); setSources(result.rows ?? []);
       setEvidence(result.sources ?? []); setAgent(result.handoff?.to ?? result.intent ?? 'Project Guide'); setMemoryCount(result.memory?.count ?? 0);setRecalledMemories(result.memory?.recent??[]);setEpisodeId(result.episodeId??'');setSavedThisAnswer(false);
@@ -151,7 +155,7 @@ export function RepositoryWorkspace({view='overview',guestRepository}:{view?:Wor
     {label:'Repository',kind:'Repository',x:55,y:55},{label:'Contributors',kind:'Contributor',x:170,y:92},
     {label:'Commits',kind:'Commit',x:292,y:48},{label:'Pull requests',kind:'Pull request',x:92,y:160},{label:'Issues',kind:'Issue',x:250,y:165},
   ];
-  const answerLabel = answerMode==='gemini'?'Gemini · graph-grounded':answerMode==='graph-template'?'Graph-grounded fallback':'Answer';
+  const answerLabel = answerMode==='graph-template'?'Graph-grounded answer':answerMode?`${answerMode} · graph-grounded`:'Answer';
   const selectedPull=data?.pulls.find(pull=>String(pull.number)===briefPr)??data?.pulls[0];
   const questionExamples=[
     {label:'Find a reviewer',question:selectedPull?`Who should review PR #${selectedPull.number}?`:'Who should review this PR?'},
@@ -170,6 +174,7 @@ export function RepositoryWorkspace({view='overview',guestRepository}:{view?:Wor
         <Link aria-current={view==='ask'?'page':undefined} className={`side-link ${view==='ask'?'active':''}`} href={`${repoPath}/ask`}><MessageSquareText/><span className="side-link-copy"><strong>Ask</strong><small>Questions &amp; recommendations</small></span></Link>
         {!isGuest&&<Link aria-current={view==='memory'?'page':undefined} className={`side-link ${view==='memory'?'active':''}`} href={`${repoPath}/memory`}><Brain/><span className="side-link-copy"><strong>Saved memory</strong><small>Findings you kept</small></span></Link>}
         <Link className="side-link" href={`${repoPath}/explore`}><Network/><span className="side-link-copy"><strong>Graph explorer</strong><small>Visual connections</small></span></Link>
+        {!isGuest&&<Link className="side-link" href={`${repoPath}/code`}><FileCode2/><span className="side-link-copy"><strong>Code graph</strong><small>Files, symbols, tests &amp; imports</small></span></Link>}
       </nav>
       <div className="side-spacer"/><div className="graph-status"><small><i className="status-pulse"/> DATA SOURCE</small><p>{repository}</p></div>
       <Link href={isGuest?"/demo":"/setup/github"} className="side-link"><Github/><span>{isGuest?"Try another public repo":"Connect another repo"}</span></Link>
@@ -185,6 +190,7 @@ export function RepositoryWorkspace({view='overview',guestRepository}:{view?:Wor
           <Link className="workspace-guide-card" href={`${repoPath}/ask`}><span className="workspace-guide-icon ask"><MessageSquareText size={18}/></span><strong>Ask a question</strong><p>Get graph-backed answers about reviewers, expertise, changes, and decisions.</p><span className="workspace-guide-action">Ask the project <ArrowRight size={13}/></span></Link>
           <Link className="workspace-guide-card" href={`${repoPath}/activity`}><span className="workspace-guide-icon activity"><GitPullRequest size={18}/></span><strong>Browse repository activity</strong><p>Read recent pull requests, issues, and commits as a timeline.</p><span className="workspace-guide-action">View activity <ArrowRight size={13}/></span></Link>
           <Link className="workspace-guide-card" href={`${repoPath}/explore`}><span className="workspace-guide-icon graph"><Network size={18}/></span><strong>Explore connections</strong><p>Follow people, files, reviews, and work items through the graph.</p><span className="workspace-guide-action">Open graph explorer <ArrowRight size={13}/></span></Link>
+          {!isGuest&&<Link className="workspace-guide-card" href={`${repoPath}/code`}><span className="workspace-guide-icon code"><FileCode2 size={18}/></span><strong>Explore code structure</strong><p>Trace repository files, Python symbols, tests, and local imports separately from GitHub activity.</p><span className="workspace-guide-action">Open code graph <ArrowRight size={13}/></span></Link>}
           {!isGuest&&<Link className="workspace-guide-card" href={`${repoPath}/memory`}><span className="workspace-guide-icon memory"><Brain size={18}/></span><strong>Return to saved findings</strong><p>Keep source-backed investigations and recall them in future questions.</p><span className="workspace-guide-action">Open saved memory <ArrowRight size={13}/></span></Link>}
         </div></section>
         </>}

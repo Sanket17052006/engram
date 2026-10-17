@@ -1,5 +1,5 @@
 type Evidence = { id?: number; title: string; url: string; role: string };
-export type LlmProvider = 'gemini';
+export type LlmProvider = 'gemini' | 'ollama';
 type LlmContext = {
   prompt: string;
   repository: string;
@@ -19,6 +19,9 @@ type LlmConfiguration = {
 const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
 export function getLlmConfiguration(): LlmConfiguration {
+  if (process.env.ENGRAM_MODEL_PROVIDER?.toLowerCase() === 'ollama') {
+    return { provider: 'ollama', model: process.env.ENGRAM_MODEL || 'qwen2.5-coder:1.5b', configured: true };
+  }
   return {
     provider: 'gemini',
     model: process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,

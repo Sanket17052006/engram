@@ -4,13 +4,16 @@ import hmac
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .agent import ask, mcp
+from .codebase import scan_codebase
 from .db import graph_for, graph_named, normalize, rows
 
 
@@ -39,9 +42,23 @@ async def principal(
     return Principal(user_id=user_id, login=login, repository=repository)
 
 
+class UserModelConfig(BaseModel):
+    provider: Literal["openai", "anthropic", "gemini", "groq", "openrouter", "together", "deepseek", "ollama"]
+    model: str = Field(min_length=1, max_length=120, pattern=r"^[a-zA-Z0-9._:/-]+$")
+    api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
+
+    @model_validator(mode="after")
+    def require_key_for_hosted_provider(self):
+        if self.provider != "ollama" and (not self.api_key or len(self.api_key) < 8):
+            raise ValueError("A provider API key is required")
+        return self
+
+
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=500)
     target_number: int = Field(default=0, ge=0, le=10_000_000, alias="targetNumber")
+    user_model: UserModelConfig | None = Field(default=None, alias="modelConfig")
+    remember: bool = True
 
 
 class MemorySaveRequest(BaseModel):
@@ -56,6 +73,174 @@ class GraphQuery(BaseModel):
     graph_name: str = Field(pattern=r"^engram_u[0-9]+_[a-f0-9]{12}$", alias="graphName")
     query: str = Field(min_length=1, max_length=64_000)
     params: dict = Field(default_factory=dict)
+
+
+class CodebaseNeighborhoodRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=20)
+
+
+class CodebaseFile(BaseModel):
+    path: str = Field(min_length=1, max_length=300)
+    content: str = Field(max_length=1_000_000)
+
+
+class CodebaseImportContents(BaseModel):
+    files: list[CodebaseFile] = Field(min_length=1, max_length=2500)
+    commit: str = Field(min_length=7, max_length=64)
+    branch: str = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_content_size_and_paths(self):
+        total = 0
+        for item in self.files:
+            parts = Path(item.path).parts
+            if Path(item.path).is_absolute() or ".." in parts or ".git" in parts or not re.fullmatch(r"[A-Za-z0-9_./-]+", item.path):
+                raise ValueError("Source files must use safe repository-relative paths")
+            total += len(item.content.encode("utf-8"))
+        if total > 30_000_000:
+            raise ValueError("Code graph import is limited to 30 MB of source text")
+        return self
+
+
+def _codebase_root() -> str:
+    root = os.environ.get("ENGRAM_CODEBASE_ROOT", "")
+    if not root:
+        raise HTTPException(status_code=503, detail="No local source checkout is configured for code graph import.")
+    return root
+
+
+@app.post("/v1/codebase/import")
+async def import_codebase(identity: Annotated[Principal, Depends(principal)]):
+    """Index a preconfigured local checkout without accepting paths from the caller."""
+    try:
+        scanned = scan_codebase(_codebase_root())
+        if not scanned["nodes"]:
+            raise HTTPException(status_code=422, detail="No supported source files were found in the configured checkout.")
+        return await _store_scanned_codebase(identity, scanned)
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Code graph import failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not import the configured source checkout into FalkorDB.") from error
+
+
+async def _store_scanned_codebase(identity: Principal, scanned: dict):
+    graph = graph_for(identity.user_id, identity.repository)
+    repository = identity.repository
+    await graph.query("MATCH (n {repository:$repo, sourceType:'codebase'}) DETACH DELETE n", {"repo": repository})
+    node_groups: dict[str, list[dict]] = {"CodeFile": [], "TestFile": [], "CodeSymbol": []}
+    for item in scanned["nodes"]:
+        node = dict(item)
+        label = str(node.pop("type"))
+        node["graphKey"] = node.pop("id")
+        node["repository"] = repository
+        node["sourceType"] = "codebase"
+        node_groups[label].append(node)
+    for label, batch in node_groups.items():
+        for start in range(0, len(batch), 100):
+            await graph.query(f"UNWIND $items AS item MERGE (n:{label} {{graphKey:item.graphKey, repository:item.repository, sourceType:item.sourceType}}) SET n += item", {"items": batch[start:start + 100]})
+    edges = [dict(edge, repository=repository, sourceType="codebase") for edge in scanned["edges"]]
+    for start in range(0, len(edges), 100):
+        await graph.query("""UNWIND $items AS item
+          MATCH (source {graphKey:item.source,repository:item.repository,sourceType:item.sourceType})
+          MATCH (target {graphKey:item.target,repository:item.repository,sourceType:item.sourceType})
+          MERGE (source)-[r:CODE_RELATION {kind:item.type,repository:item.repository,sourceType:item.sourceType}]->(target)""", {"items": edges[start:start + 100]})
+    stored_edges = rows(await graph.query("MATCH ()-[r:CODE_RELATION {repository:$repo,sourceType:'codebase'}]->() RETURN count(r)", {"repo": repository}), ["count"])
+    actual_edge_count = int(stored_edges[0].get("count", 0)) if stored_edges else 0
+    snapshot = {"repository": repository, "sourceType": "codebase", "filesScanned": scanned["filesScanned"], "nodeCount": len(scanned["nodes"]), "edgeCount": actual_edge_count, "truncated": scanned["truncated"], "importedAt": datetime.now(timezone.utc).isoformat(), "commit": scanned.get("commit", ""), "branch": scanned.get("branch", "")}
+    await graph.query("MERGE (s:CodebaseSnapshot {repository:$repository,sourceType:'codebase'}) SET s += $snapshot", {"repository": repository, "snapshot": snapshot})
+    return {"imported": True, "repository": repository, "filesScanned": snapshot["filesScanned"], "nodeCount": snapshot["nodeCount"], "edgeCount": snapshot["edgeCount"], "truncated": snapshot["truncated"], "importedAt": snapshot["importedAt"], "commit": snapshot["commit"], "branch": snapshot["branch"]}
+
+
+@app.post("/v1/codebase/import-content")
+async def import_codebase_contents(body: CodebaseImportContents, identity: Annotated[Principal, Depends(principal)]):
+    """Store a bounded code snapshot obtained by the authenticated GitHub gateway."""
+    try:
+        with tempfile.TemporaryDirectory(prefix="engram-code-import-") as temporary:
+            root = Path(temporary).resolve()
+            for item in body.files:
+                target = (root / item.path).resolve()
+                if not target.is_relative_to(root):
+                    raise HTTPException(status_code=400, detail="Unsafe source path in code graph import.")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(item.content, encoding="utf-8")
+            scanned = scan_codebase(root)
+        if not scanned["nodes"]:
+            raise HTTPException(status_code=422, detail="The selected GitHub repository has no supported source files in the bounded import window.")
+        scanned["commit"] = body.commit
+        scanned["branch"] = body.branch
+        return await _store_scanned_codebase(identity, scanned)
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"GitHub code graph import failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not store the GitHub source snapshot in FalkorDB.") from error
+
+
+@app.get("/v1/codebase/graph")
+async def codebase_graph(identity: Annotated[Principal, Depends(principal)]):
+    try:
+        graph = graph_for(identity.user_id, identity.repository)
+        nodes = rows(await graph.query("""MATCH (n {repository:$repo,sourceType:'codebase'})
+          WHERE n:CodeFile OR n:TestFile OR n:CodeSymbol
+          RETURN id(n),labels(n),properties(n) LIMIT 12000""", {"repo": identity.repository}), ["nodeId", "labels", "node"])
+        edges = rows(await graph.query("""MATCH (source {repository:$repo,sourceType:'codebase'})-[r:CODE_RELATION {repository:$repo,sourceType:'codebase'}]->(target {repository:$repo,sourceType:'codebase'})
+          RETURN source.graphKey,type(r),r.kind,target.graphKey LIMIT 20000""", {"repo": identity.repository}), ["source", "edgeType", "kind", "target"])
+        snapshot_rows = rows(await graph.query("""MATCH (s:CodebaseSnapshot {repository:$repo,sourceType:'codebase'})
+          RETURN properties(s) LIMIT 1""", {"repo": identity.repository}), ["snapshot"])
+        output_nodes = []
+        for item in nodes:
+            properties = item.get("node") or {}
+            labels = item.get("labels") or ["CodeFile"]
+            key = str(properties.get("graphKey", item.get("nodeId")))
+            label = properties.get("name") or properties.get("path") or key
+            if properties.get("kind"):
+                label = f"{properties['kind']} {label}"
+            output_nodes.append({"id": key, "type": labels[0], "label": str(label), "properties": properties})
+        output_edges = [{"id": f"code-edge-{index}", "source": str(item.get("source")),
+                         "target": str(item.get("target")), "type": str(item.get("kind") or "RELATED")}
+                        for index, item in enumerate(edges)]
+        meta = (snapshot_rows[0].get("snapshot") if snapshot_rows else None) or {}
+        return {"nodes": output_nodes, "edges": output_edges, "meta": {"repository": identity.repository,
+                "source": "falkordb", "importedAt": meta.get("importedAt"), "filesScanned": meta.get("filesScanned", 0),
+                "truncated": meta.get("truncated", False), "branch": meta.get("branch", ""), "commit": meta.get("commit", "")}}
+    except Exception as error:
+        if isinstance(error, HTTPException):
+            raise
+        print(f"Code graph query failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not read the code graph from FalkorDB.") from error
+
+
+@app.post("/v1/codebase/neighborhood")
+async def codebase_neighborhood(body: CodebaseNeighborhoodRequest, identity: Annotated[Principal, Depends(principal)]):
+    paths = list(dict.fromkeys(path for path in body.paths if len(path) <= 300 and not path.startswith("/") and ".." not in path.split("/")))
+    if not paths:
+        raise HTTPException(status_code=400, detail="Provide repository-relative code paths.")
+    try:
+        graph = graph_for(identity.user_id, identity.repository)
+        result = rows(await graph.query("""MATCH (n {repository:$repo,sourceType:'codebase'})
+          WHERE n.path IN $paths
+          WITH n LIMIT 60
+          OPTIONAL MATCH (n)-[r:CODE_RELATION]->(neighbor {repository:$repo,sourceType:'codebase'})
+          RETURN labels(n),properties(n),r.kind,labels(neighbor),properties(neighbor) LIMIT 300""", {"repo": identity.repository, "paths": paths}), ["nodeLabels", "node", "kind", "neighborLabels", "neighbor"])
+        nodes_by_id: dict[str, dict] = {}
+        edges_by_id: dict[str, dict] = {}
+        for row in result:
+            for item, labels in ((row.get("node"), row.get("nodeLabels")), (row.get("neighbor"), row.get("neighborLabels"))):
+                if not isinstance(item, dict) or not item.get("graphKey"):
+                    continue
+                key = str(item["graphKey"])
+                nodes_by_id[key] = {"id": key, "type": (labels or ["CodeFile"])[0],
+                                    "label": str(item.get("name") or item.get("path") or key), "path": item.get("path", "")}
+            source, neighbor = row.get("node"), row.get("neighbor")
+            if isinstance(source, dict) and isinstance(neighbor, dict) and source.get("graphKey") and neighbor.get("graphKey"):
+                kind = str(row.get("kind") or "RELATED")
+                edge_id = str(source["graphKey"]) + "|" + kind + "|" + str(neighbor["graphKey"])
+                edges_by_id[edge_id] = {"id": edge_id, "source": str(source["graphKey"]), "target": str(neighbor["graphKey"]), "type": kind}
+        return {"nodes": list(nodes_by_id.values()), "edges": list(edges_by_id.values()), "source": "falkordb"}
+    except Exception as error:
+        print(f"Code graph neighborhood query failed ({type(error).__name__}): {error}")
+        raise HTTPException(status_code=503, detail="Could not trace changed files in the code graph.") from error
 
 
 @app.get("/health")
@@ -99,7 +284,8 @@ async def chat(body: ChatRequest, identity: Annotated[Principal, Depends(princip
         if not re.sub(r"\b(what|decision|decided|rationale|why|did|was|do|we|about|the|for|in|this|repo|repository)\b", " ", stripped).strip():
             raise HTTPException(status_code=400, detail="Add a topic or repository term to trace the related discussion.")
     try:
-        return await ask(identity.user_id, identity.login, identity.repository, prompt, target_number=body.target_number)
+        return await ask(identity.user_id, identity.login, identity.repository, prompt, remember=body.remember, target_number=body.target_number,
+                         model_config=body.user_model.model_dump(by_alias=True) if body.user_model else None)
     except Exception as error:
         print(f"Agent run failed ({type(error).__name__}): {error}")
         raise HTTPException(status_code=503, detail="The graph agent could not complete this request. Check FalkorDB and try again.") from error

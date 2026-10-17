@@ -7,3 +7,5 @@ node_modules/
 out/
 coverage/
 .DS_Store
+__pycache__/
+*.py[cod]

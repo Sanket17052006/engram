@@ -65,6 +65,16 @@ test('chat validates input and requires a selected GitHub repository', async () 
   assert.match(data.error, /sign in/i);
 });
 
+test('chat rejects malformed bring-your-own-model settings before dispatch', async () => {
+  const response = await fetch(new URL('/api/chat', baseUrl), {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'Explain a change', modelConfig: { provider: 'custom-url', model: 'model', apiKey: 'secret-value' } }),
+  });
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.doesNotMatch(JSON.stringify(data), /secret-value/);
+});
+
 test('graph and node APIs require an authenticated selected repository', async () => {
   const graph = await fetch(new URL('/api/graph/explore', baseUrl), { cache: 'no-store' });
   assert.equal(graph.status, 401);
@@ -72,6 +82,31 @@ test('graph and node APIs require an authenticated selected repository', async (
   const node = await fetch(new URL('/api/node/1', baseUrl), { cache: 'no-store' });
   assert.equal(node.status, 401);
   assert.match(node.headers.get('cache-control') ?? '', /private, no-store/);
+});
+
+test('code graph import and reads require an authenticated selected repository', async () => {
+  const read = await fetch(new URL('/api/codebase/graph', baseUrl), { cache: 'no-store' });
+  assert.equal(read.status, 401);
+  assert.match(read.headers.get('cache-control') ?? '', /private, no-store/);
+  const start = await fetch(new URL('/api/codebase/import', baseUrl), { method: 'POST', cache: 'no-store' });
+  assert.equal(start.status, 401);
+  assert.match(start.headers.get('cache-control') ?? '', /private, no-store/);
+  const page = await fetch(new URL('/workspace/connected/code', baseUrl), { redirect: 'manual', cache: 'no-store' });
+  assert.equal(page.status, 307);
+  assert.equal(new URL(page.headers.get('location'), baseUrl).pathname, '/setup/github');
+});
+
+test('local repair review is private and does not expose a guest write path', async () => {
+  const response = await fetch(new URL('/api/code-repair/1', baseUrl), { cache: 'no-store' });
+  assert.equal(response.status, 401);
+  assert.match(response.headers.get('cache-control') ?? '', /private, no-store/);
+  const unknownRun = await fetch(new URL('/api/code-repair/1', baseUrl), { cache: 'no-store' });
+  assert.equal(unknownRun.status, 401);
+  const start = await fetch(new URL('/api/code-repair/start', baseUrl), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ issueNumber: 1 }),
+  });
+  assert.equal(start.status, 401);
+  assert.match(start.headers.get('cache-control') ?? '', /private, no-store/);
 });
 
 test('saved project memory stays behind the signed-in repository boundary', async () => {

@@ -41,6 +41,16 @@ async function pages<T>(path: string, token?: string, max = ITEM_WINDOW): Promis
   }
   return rows.slice(0, max);
 }
+async function pagesMatching<T>(path:string,token:string|undefined,accept:(row:T)=>boolean,max=ITEM_WINDOW,maxPages=20):Promise<T[]>{
+  const rows:T[]=[];
+  for(let page=1;rows.length<max&&page<=maxPages;page+=1){
+    const separator=path.includes('?')?'&':'?';
+    const batch=await githubApi<T[]>(`${path}${separator}per_page=100&page=${page}`,token);
+    rows.push(...batch.filter(accept));
+    if(batch.length<100)break;
+  }
+  return rows.slice(0,max);
+}
 async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const output: R[] = [];
   for (let index = 0; index < items.length; index += size) output.push(...await Promise.all(items.slice(index, index + size).map(fn)));
@@ -103,7 +113,9 @@ export async function POST(request: Request) {
     }
     const [pulls, issueRows, defaultCommits, contributors, branchRows] = await Promise.all([
       pages<Pull>(`${sourcePrefix}/pulls?state=all&sort=updated&direction=desc`, sourceToken, ITEM_WINDOW),
-      pages<Issue>(`${sourcePrefix}/issues?state=all&sort=updated&direction=desc`, sourceToken, ITEM_WINDOW),
+      // GitHub's issues endpoint also returns pull requests. Keep paging after
+      // filtering so a PR-heavy repo still imports a useful window of real issues.
+      pagesMatching<Issue>(`${sourcePrefix}/issues?state=all&sort=updated&direction=desc`, sourceToken, item=>!item.pull_request, ITEM_WINDOW),
       // Contents:read is needed for this endpoint; if the app has not been granted it, keep syncing the rest.
       pages<Commit>(`${prefix}/commits?sha=${encodeURIComponent(repository.default_branch)}`, token, ITEM_WINDOW).then(rows=>({available:true,rows})).catch(() => ({available:false,rows:[] as Commit[]})),
       pages<User>(`${sourcePrefix}/contributors`, sourceToken, 100).catch(() => [] as User[]),
@@ -133,7 +145,7 @@ export async function POST(request: Request) {
       commitsBySha.set(commit.sha,{...previous,...commit,branchNames:Array.from(new Set([...(previous?.branchNames??[]),...(commit.branchNames??[repository.default_branch])]))});
     }
     const commits=Array.from(commitsBySha.values()).sort((a,b)=>Date.parse(b.commit.committer?.date??b.commit.author?.date??'')-Date.parse(a.commit.committer?.date??a.commit.author?.date??'')).slice(0,ITEM_WINDOW);
-    const issues = issueRows.filter((item) => !item.pull_request);
+    const issues = issueRows;
     // Work item lists are fresh on every sync. Re-read details for the newest
     // updated items too: reviews/comments can change independently of the
     // activity fields we retain, and an old detail cursor could otherwise hide it.
