@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="930" viewBox="0 0 1440 930" role="img" aria-labelledby="title desc">
+  <title id="title">Engram's FalkorDB repository graph</title>
+  <desc id="desc">A schema diagram showing repository activity, code structure, reviewer evidence, and persistent agent memory as connected FalkorDB nodes and relationships.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#718078"/></marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#18251d" flood-opacity=".08"/></filter>
+    <style>
+      text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#26332b}
+      .title{font-size:34px;font-weight:750;letter-spacing:-.8px}.sub{font-size:16px;fill:#68766d}
+      .group{font-size:13px;font-weight:750;letter-spacing:1.7px;fill:#748278}
+      .node rect{fill:#fff;stroke:#dce3d9;stroke-width:1.5;rx:14;filter:url(#shadow)}
+      .node text.name{font-size:16px;font-weight:700}.node text.meta{font-size:12px;fill:#718078}
+      .repo rect{fill:#24342b;stroke:#24342b}.repo text{fill:#fff}.repo text.meta{fill:#d0dbd2}
+      .code rect{fill:#f2f7f5;stroke:#b8d4cb}.memory rect{fill:#fff7ec;stroke:#edc99a}
+      .edge{fill:none;stroke:#839187;stroke-width:2;marker-end:url(#arrow)}
+      .edge.codeedge{stroke:#65a395}.edge.memedge{stroke:#d79b51}
+      .edge-label{font-size:11px;font-weight:650;fill:#66746b;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+      .note{font-size:13px;fill:#59685e}.footer{font-size:12px;fill:#7a877e}
+    </style>
+  </defs>
+  <rect width="1440" height="930" rx="24" fill="#fbfaf6"/>
+  <text x="52" y="66" class="title">Engram's FalkorDB graph</text>
+  <text x="54" y="96" class="sub">Imported repository facts become connected evidence that agents can traverse and explain.</text>
+
+  <text x="55" y="145" class="group">GITHUB REPOSITORY ACTIVITY</text>
+  <text x="55" y="515" class="group">SOURCE CODE STRUCTURE · IMPORTED FROM THE SELECTED DEFAULT-BRANCH SNAPSHOT</text>
+  <text x="55" y="748" class="group">AGENT MEMORY · SAME USER- AND REPOSITORY-SCOPED GRAPH</text>
+
+  <!-- edges behind the cards -->
+  <path class="edge" d="M240 240 L335 240"/><text class="edge-label" x="261" y="229">HAS_ITEM</text>
+  <path class="edge" d="M625 216 C585 216 557 216 510 216"/><text class="edge-label" x="552" y="204">OPENED</text>
+  <path class="edge" d="M435 276 C470 301 555 302 625 301"/><text class="edge-label" x="515" y="297">MODIFIES</text>
+  <path class="edge" d="M440 276 C470 344 554 385 625 407"/><text class="edge-label" x="505" y="361">CLOSES · issue link</text>
+  <path class="edge" d="M810 218 L908 218"/><text class="edge-label" x="833" y="207">SUBMITTED</text>
+  <path class="edge" d="M908 236 C815 270 625 270 510 240"/><text class="edge-label" x="714" y="263">ON_PR</text>
+  <path class="edge" d="M720 252 C760 278 826 295 908 305"/><text class="edge-label" x="800" y="281">WROTE</text>
+  <path class="edge" d="M908 326 C822 369 651 367 510 255"/><text class="edge-label" x="732" y="357">ON_ITEM</text>
+  <path class="edge codeedge" d="M810 569 L908 569"/><text class="edge-label" x="833" y="557">DEFINES</text>
+  <path class="edge codeedge" d="M908 689 L810 689"/><text class="edge-label" x="839" y="678">TESTS</text>
+  <path class="edge codeedge" d="M685 603 L685 655"/><text class="edge-label" x="698" y="637">IMPORTS</text>
+  <path class="edge memedge" d="M240 797 L335 797"/><text class="edge-label" x="251" y="785">HAS_MEMORY</text>
+  <path class="edge memedge" d="M625 797 C584 775 553 775 510 797"/><text class="edge-label" x="541" y="776">PRESERVES</text>
+  <path class="edge memedge" d="M810 797 L908 797"/><text class="edge-label" x="822" y="785">GROUNDED_IN</text>
+  <path class="edge memedge" d="M715 840 C682 817 556 817 430 830"/><text class="edge-label" x="545" y="819">WROTE</text>
+  <path class="edge memedge" d="M520 865 L625 865"/><text class="edge-label" x="530" y="853">HANDED_OFF_TO</text>
+
+  <!-- activity records -->
+  <g class="node repo" transform="translate(55 204)"><rect width="185" height="72"/><text class="name" x="18" y="31">Repository</text><text class="meta" x="18" y="52">fullName · defaultBranch</text></g>
+  <g class="node" transform="translate(335 204)"><rect width="175" height="72"/><text class="name" x="18" y="31">WorkItem</text><text class="meta" x="18" y="52">kind: PR or Issue</text></g>
+  <g class="node" transform="translate(625 180)"><rect width="185" height="72"/><text class="name" x="18" y="31">Contributor</text><text class="meta" x="18" y="52">login · activity counts</text></g>
+  <g class="node" transform="translate(625 276)"><rect width="185" height="72"/><text class="name" x="18" y="31">File</text><text class="meta" x="18" y="52">path · change stats</text></g>
+  <g class="node" transform="translate(625 383)"><rect width="185" height="62"/><text class="name" x="18" y="28">WorkItem</text><text class="meta" x="18" y="47">linked Issue</text></g>
+  <g class="node" transform="translate(908 180)"><rect width="192" height="72"/><text class="name" x="18" y="31">Review</text><text class="meta" x="18" y="52">state · submittedAt</text></g>
+  <g class="node" transform="translate(908 276)"><rect width="192" height="72"/><text class="name" x="18" y="31">Comment</text><text class="meta" x="18" y="52">body · timestamp · URL</text></g>
+
+  <!-- code structure -->
+  <g class="node code" transform="translate(625 535)"><rect width="185" height="68"/><text class="name" x="18" y="30">CodeFile</text><text class="meta" x="18" y="50">path · language · hash · summary</text></g>
+  <g class="node code" transform="translate(908 535)"><rect width="192" height="68"/><text class="name" x="18" y="30">CodeSymbol</text><text class="meta" x="18" y="50">name · kind · file path</text></g>
+  <g class="node code" transform="translate(908 655)"><rect width="192" height="68"/><text class="name" x="18" y="30">TestFile</text><text class="meta" x="18" y="50">path · language · hash · summary</text></g>
+  <g class="node code" transform="translate(625 655)"><rect width="185" height="68"/><text class="name" x="18" y="30">CodeFile</text><text class="meta" x="18" y="50">imported module</text></g>
+
+  <!-- persistent agent memory -->
+  <g class="node repo" transform="translate(55 762)"><rect width="185" height="68"/><text class="name" x="18" y="30">Repository</text><text class="meta" x="18" y="50">verified user + repo scope</text></g>
+  <g class="node memory" transform="translate(335 762)"><rect width="175" height="68"/><text class="name" x="18" y="30">Episode</text><text class="meta" x="18" y="50">question · answer · evidence</text></g>
+  <g class="node memory" transform="translate(625 762)"><rect width="185" height="68"/><text class="name" x="18" y="30">ProjectMemory</text><text class="meta" x="18" y="50">saved finding</text></g>
+  <g class="node memory" transform="translate(908 762)"><rect width="242" height="68"/><text class="name" x="18" y="30">Source records</text><text class="meta" x="18" y="50">WorkItem · Review · File · Comment</text></g>
+  <g class="node memory" transform="translate(335 840)"><rect width="185" height="50"/><text class="name" x="14" y="22">Agent · Context Retriever</text><text class="meta" x="14" y="40">shared memory lookup</text></g>
+  <g class="node memory" transform="translate(625 840)"><rect width="185" height="50"/><text class="name" x="14" y="22">Agent · Specialist</text><text class="meta" x="14" y="40">writes the investigation</text></g>
+  <text x="55" y="911" class="footer">Code graph nodes store metadata and hashes, not source bodies. CODE_RELATION.kind holds IMPORTS, DEFINES, or TESTS. Schema view, not a live snapshot.</text>
+</svg>

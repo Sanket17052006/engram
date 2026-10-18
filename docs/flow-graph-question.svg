@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="540" viewBox="0 0 1320 540" role="img" aria-labelledby="title desc">
+  <title id="title">Engram graph-grounded question flow</title><desc id="desc">Question to specialist selection to parameterized Cypher traversals through the FalkorDB graph, resulting in an evidence-backed answer, sources, and an Episode memory.</desc>
+  <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#78867c"/></marker><style>
+    text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#27352c}.title{font-size:30px;font-weight:750}.sub{font-size:15px;fill:#6f7d73}.k{font-size:12px;font-weight:750;letter-spacing:1.4px;fill:#7a887d}.h{font-size:17px;font-weight:700}.p{font-size:13px;fill:#66746b}.card{fill:#fff;stroke:#dfe5dc;stroke-width:1.5}.green{fill:#eef5ef;stroke:#c8d9ca}.orange{fill:#fff5e9;stroke:#edcfab}.line{stroke:#78867c;stroke-width:2;fill:none;marker-end:url(#a)}.dash{stroke:#d3944e;stroke-width:2;fill:none;stroke-dasharray:6 6;marker-end:url(#a)}.foot{font-size:12px;fill:#758279}
+  </style></defs>
+  <rect width="1320" height="540" rx="24" fill="#fbfaf6"/><text class="title" x="48" y="58">2 · Ask a graph-grounded question</text><text class="sub" x="50" y="86">The model can help route or phrase the answer; graph query results provide the repository facts.</text>
+  <g transform="translate(48 150)"><rect class="card" width="210" height="155" rx="16"/><text class="k" x="18" y="30">QUESTION</text><text class="h" x="18" y="64">“Who should</text><text class="h" x="18" y="88">review this PR?”</text><text class="p" x="18" y="126">Selected repo + PR context</text></g>
+  <path class="line" d="M258 228H300"/>
+  <g transform="translate(306 150)"><rect class="card" width="210" height="155" rx="16"/><text class="k" x="18" y="30">LANGGRAPH ROUTER</text><text class="h" x="18" y="64">Reviewer Router</text><text class="p" x="18" y="96">Chooses a specialist tool</text><text class="p" x="18" y="120">or deterministic fallback.</text></g>
+  <path class="line" d="M516 228H558"/>
+  <g transform="translate(564 150)"><rect class="card green" width="228" height="155" rx="16"/><text class="k" x="18" y="30">PARAMETERIZED CYPHER</text><text class="h" x="18" y="64">Traverse FalkorDB</text><text class="p" x="18" y="96">Target PR → changed files</text><text class="p" x="18" y="120">→ earlier PRs → reviews</text><text class="p" x="18" y="142">→ reviewer contributors</text></g>
+  <path class="line" d="M792 228H834"/>
+  <g transform="translate(840 150)"><rect class="card" width="210" height="155" rx="16"/><text class="k" x="18" y="30">EVIDENCE</text><text class="h" x="18" y="64">Rank candidates</text><text class="p" x="18" y="96">Shared file history,</text><text class="p" x="18" y="120">review counts, source URLs</text></g>
+  <path class="line" d="M1050 228H1092"/>
+  <g transform="translate(1098 150)"><rect class="card orange" width="174" height="155" rx="16"/><text class="k" x="16" y="30">ANSWER</text><text class="h" x="16" y="64">Explain + cite</text><text class="p" x="16" y="96">Answer, Cypher,</text><text class="p" x="16" y="120">params, sources</text></g>
+  <path class="dash" d="M1185 305V370H692V315"/>
+  <g transform="translate(478 380)"><rect class="card" width="430" height="88" rx="16"/><text class="k" x="20" y="28">PERSISTENT MEMORY</text><text class="h" x="20" y="57">Signed-in runs write an Episode to this graph</text><text class="p" x="20" y="77">Saving a finding adds ProjectMemory and GROUNDED_IN links to source records.</text></g>
+  <text class="foot" x="50" y="510">Gemini synthesis is optional. If enabled, it receives bounded graph-derived evidence; it does not invent the underlying repository facts.</text>
+</svg>
