@@ -14,6 +14,6 @@
   <path class="line" d="M1050 228H1092"/>
   <g transform="translate(1098 150)"><rect class="card orange" width="174" height="155" rx="16"/><text class="k" x="16" y="30">ANSWER</text><text class="h" x="16" y="64">Explain + cite</text><text class="p" x="16" y="96">Answer, Cypher,</text><text class="p" x="16" y="120">params, sources</text></g>
   <path class="dash" d="M1185 305V370H692V315"/>
-  <g transform="translate(478 380)"><rect class="card" width="430" height="88" rx="16"/><text class="k" x="20" y="28">PERSISTENT MEMORY</text><text class="h" x="20" y="57">Signed-in runs write an Episode to this graph</text><text class="p" x="20" y="77">Saving a finding adds ProjectMemory and GROUNDED_IN links to source records.</text></g>
-  <text class="foot" x="50" y="510">Gemini synthesis is optional. If enabled, it receives bounded graph-derived evidence; it does not invent the underlying repository facts.</text>
+  <g transform="translate(478 380)"><rect class="card" width="430" height="110" rx="16"/><text class="k" x="20" y="28">PERSISTENT MEMORY</text><text class="h" x="20" y="57">Signed-in runs write an Episode to this graph</text><text class="p" x="20" y="77">Saving a finding adds ProjectMemory linked to the Episode</text><text class="p" x="20" y="96">and its supporting source records.</text></g>
+  <text class="foot" x="50" y="510">Optional model phrasing uses bounded graph-derived evidence; Gemini can also select the graph tool. Without a configured model, deterministic routing and templates are used.</text>
 </svg>

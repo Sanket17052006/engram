@@ -13,5 +13,5 @@
   <g transform="translate(876 145)"><rect class="card orange" width="220" height="190" rx="16"/><text class="k" x="18" y="30">STORE</text><text class="h" x="18" y="63">FalkorDB graph</text><text class="p" x="18" y="94">Nodes + typed relations;</text><text class="p" x="18" y="118">separate user/repo scope.</text><text class="p" x="18" y="154">Cypher agents and explorer</text><text class="p" x="18" y="176">read the same evidence.</text></g>
   <path class="line" d="M1096 240H1146"/>
   <g transform="translate(1152 145)"><rect class="card" width="140" height="190" rx="16"/><text class="k" x="16" y="30">USE</text><text class="h" x="16" y="63">Ask</text><text class="p" x="16" y="94">Investigate</text><text class="p" x="16" y="118">Explore</text><text class="p" x="16" y="142">Trace sources</text></g>
-  <text class="foot" x="50" y="395">GitHub is the source of current repository activity. FalkorDB stores the imported graph snapshot; if refresh fails, Engram can report the existing snapshot and sync status.</text>
+  <text class="foot" x="50" y="395">Signed-in refreshes fetch on request; public snapshots are reused for five minutes. A failed refresh leaves the last graph stored and reports the refresh error.</text>
 </svg>

@@ -10,7 +10,7 @@
   <path class="line" d="M544 235H594"/>
   <g transform="translate(600 150)"><rect class="card" width="220" height="170" rx="16"/><text class="k" x="18" y="30">VISUALIZE</text><text class="h" x="18" y="64">Render real records</text><text class="p" x="18" y="96">Nodes = repository entities.</text><text class="p" x="18" y="120">Edges = stored relationships.</text><text class="p" x="18" y="150">Labels show relation types.</text></g>
   <path class="line" d="M820 235H870"/>
-  <g transform="translate(876 150)"><rect class="card orange" width="220" height="170" rx="16"/><text class="k" x="18" y="30">INSPECT</text><text class="h" x="18" y="64">Filter the view</text><text class="p" x="18" y="96">All · PRs · Issues · Reviews</text><text class="p" x="18" y="120">People · Commits · Files</text><text class="p" x="18" y="150">Search within loaded nodes.</text></g>
+  <g transform="translate(876 150)"><rect class="card orange" width="220" height="170" rx="16"/><text class="k" x="18" y="30">INSPECT</text><text class="h" x="18" y="64">Filter the view</text><text class="p" x="18" y="96">All · PRs · Issues · Reviews</text><text class="p" x="18" y="120">Reviewers · Assignees · Commits</text><text class="p" x="18" y="144">Comments · Files · Contributors</text><text class="p" x="18" y="164">Labels · Search</text></g>
   <path class="line" d="M1096 235H1146"/>
   <g transform="translate(1152 150)"><rect class="card" width="140" height="170" rx="16"/><text class="k" x="16" y="30">FOLLOW</text><text class="h" x="16" y="64">Select</text><text class="p" x="16" y="96">Inspect details</text><text class="p" x="16" y="120">Load next links</text><text class="p" x="16" y="150">Go back / close</text></g>
   <path class="line" d="M1222 320V382H434V326"/>

@@ -3,7 +3,7 @@
   <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#78867c"/></marker><style>
     text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#27352c}.title{font-size:30px;font-weight:750}.sub{font-size:15px;fill:#6f7d73}.k{font-size:12px;font-weight:750;letter-spacing:1.4px;fill:#7a887d}.h{font-size:16px;font-weight:700}.p{font-size:12.5px;fill:#66746b}.card{fill:#fff;stroke:#dfe5dc;stroke-width:1.5}.green{fill:#eef5ef;stroke:#c8d9ca}.orange{fill:#fff5e9;stroke:#edcfab}.line{stroke:#78867c;stroke-width:2;fill:none;marker-end:url(#a)}.graph{stroke:#65a395;stroke-width:2;fill:none;marker-end:url(#a)}.warn{font-size:12px;fill:#8d6537}.foot{font-size:12px;fill:#758279}
   </style></defs>
-  <rect width="1320" height="660" rx="24" fill="#fbfaf6"/><text class="title" x="48" y="58">3 · Prepare and review an issue fix</text><text class="sub" x="50" y="86">A graph-guided local repair: every proposed source and regression test must be selected from the repository graph.</text>
+  <rect width="1320" height="660" rx="24" fill="#fbfaf6"/><text class="title" x="48" y="58">3 · Prepare and review an issue fix</text><text class="sub" x="50" y="86">A graph-guided local repair: candidate source and test files are selected from the repository graph.</text>
   <g transform="translate(48 145)"><rect class="card" width="220" height="128" rx="16"/><text class="k" x="18" y="29">1 · SELECT</text><text class="h" x="18" y="60">Choose a real issue</text><text class="p" x="18" y="88">Fetch its current GitHub</text><text class="p" x="18" y="108">title, body, and source URL.</text></g>
   <path class="line" d="M268 208H310"/>
   <g transform="translate(316 145)"><rect class="card green" width="225" height="128" rx="16"/><text class="k" x="18" y="29">2 · INVESTIGATE</text><text class="h" x="18" y="60">Query FalkorDB</text><text class="p" x="18" y="88">Graph agent gathers issue</text><text class="p" x="18" y="108">evidence; code graph ranks files.</text></g>
@@ -15,12 +15,12 @@
   <g transform="translate(1100 145)"><rect class="card orange" width="174" height="128" rx="16"/><text class="k" x="15" y="29">5 · APPLY</text><text class="h" x="15" y="60">Issue branch</text><text class="p" x="15" y="88">Create local branch</text><text class="p" x="15" y="108">from current base.</text></g>
 
   <path class="line" d="M1187 273V330H1032"/>
-  <g transform="translate(810 330)"><rect class="card" width="220" height="128" rx="16"/><text class="k" x="18" y="29">6 · VERIFY</text><text class="h" x="18" y="60">Run targeted checks</text><text class="p" x="18" y="88">Tests come from graph-linked</text><text class="p" x="18" y="108">files; failures stop the flow.</text></g>
+  <g transform="translate(810 330)"><rect class="card" width="220" height="128" rx="16"/><text class="k" x="18" y="29">6 · VERIFY</text><text class="h" x="18" y="60">Run linked Python tests</text><text class="p" x="18" y="88">Run only graph-linked Python</text><text class="p" x="18" y="108">tests; failures stop the flow.</text></g>
   <path class="line" d="M810 394H756"/>
   <g transform="translate(532 330)"><rect class="card green" width="218" height="128" rx="16"/><text class="k" x="18" y="29">7 · COMMIT ON PASS</text><text class="h" x="18" y="60">Save local branch</text><text class="p" x="18" y="88">Only validated changed files</text><text class="p" x="18" y="108">are committed.</text></g>
   <path class="line" d="M532 394H478"/>
   <g transform="translate(254 330)"><rect class="card orange" width="218" height="128" rx="16"/><text class="k" x="18" y="29">8 · HUMAN REVIEW</text><text class="h" x="18" y="60">Inspect the review page</text><text class="p" x="18" y="88">Issue, diff, test output, and</text><text class="p" x="18" y="108">FalkorDB trace are shown.</text></g>
   <path class="graph" d="M701 273V310H644V330"/>
   <text class="warn" x="254" y="493">The completed local branch and validation output are shown together for human review.</text>
-  <text class="foot" x="50" y="620">The issue is an investigation input; code candidates are matched against indexed file/symbol properties, and test coverage follows stored TESTS edges in FalkorDB.</text>
+  <text class="foot" x="50" y="620">Python AST parsing supplies symbol/import edges; file-stem heuristics infer TESTS links. Repair runs linked Python pytest files only; unsupported or unlinked tests are not claimed as verified.</text>
 </svg>

@@ -4,25 +4,29 @@
 
 <h1 align="center">Engram</h1>
 
-<p align="center"><strong>Repository knowledge you can trace, save, and use again.</strong></p>
+<p align="center"><strong>Graph-grounded GitHub investigation and local issue repair.</strong></p>
 
-Engram turns the activity around a GitHub repository into a FalkorDB knowledge graph. Its agents follow connections between contributors, pull requests, reviews, files, commits, issues, and discussions to answer questions with evidence. Signed-in users can save source-backed findings as project memory and retrieve relevant notes in later investigations.
+Engram builds a repository-specific knowledge graph in FalkorDB from GitHub collaboration activity and an index of the source tree. Its agents traverse that graph to explain repository history, find reviewers and relevant contributors, trace discussions, and connect issue reports to code and tests.
 
-## The problem
+For a selected issue, Engram uses graph evidence to choose candidate files, asks a configured model for a bounded patch, applies it on a local issue branch, runs targeted checks, and presents the diff with the graph trace for review. Signed-in users can save useful investigations as repository-scoped memory. Visitors can import public repositories without signing in.
 
-The reason behind a code change is rarely in one place. A pull request may touch a file that was reviewed in earlier work, discussed in an issue, and understood by a contributor who has since moved on. Finding that context by browsing GitHub record by record is slow, especially for someone new to the repository.
+## What Engram helps solve
 
-Engram connects those records as a graph and lets an agent investigate the paths between them. The product is repository-agnostic: a signed-in user selects a repository from their GitHub installation, while visitors can import and explore any public repository without signing in.
+| Repository problem | Engram workflow |
+|---|---|
+| Context is split across pull requests, issues, reviews, comments, commits, and files | Ask a repository question and inspect the FalkorDB records, Cypher query, parameters, and GitHub sources behind the answer. |
+| Finding an appropriate reviewer or contributor takes manual history searches | The Reviewer Router follows a pull request through its changed files to earlier pull requests and their reviews, then ranks contributors from that recorded overlap. Expertise Finder and Contributor Activity use the same imported history for topic and activity questions. |
+| An issue report does not point directly to the relevant code or regression test | The issue investigator combines the issue with FalkorDB code-graph evidence to select source and test files before generating a local patch. |
+| A large graph is difficult to inspect all at once | Explore a bounded neighborhood, filter by record type, inspect node details, and follow relationships to load the next neighborhood. |
+| Useful investigation context gets lost between questions | Signed-in investigations are stored as Episodes. Users can save selected findings as ProjectMemory and retrieve related notes in later investigations. |
 
-## A short product walkthrough
+## How a repository moves through Engram
 
-1. **Choose a repository.** Connect GitHub, or enter a public `owner/repo` in the guest explorer.
-2. **Build its graph.** Engram imports a bounded, recent activity window and writes typed repository records and relationships to FalkorDB.
-3. **Ask an investigation question.** For example, “Who should review PR #442?” The Reviewer Router follows the PR's changed files to earlier PRs and reviews, then ranks contributors by relevant review history.
-4. **Inspect the evidence.** Read the source-linked answer, inspect the Cypher query and parameters, and explore the connected graph neighborhood.
-5. **Carry a finding forward.** A signed-in user can save an investigation to project memory. Engram links that memory to its source records and can surface it during later, related investigations.
-
-Public guest graphs are isolated by repository. Guest questions are read-only and are not saved as personal memory.
+1. **Connect or choose a repository.** Sign in with GitHub and select an installed repository, or enter a public `owner/repo` in the guest explorer.
+2. **Import repository context.** Engram fetches a bounded GitHub activity snapshot and stores typed nodes and relationships in a graph scoped to that repository (and, for signed-in users, that user). The source index stores file metadata and selected code relationships in FalkorDB.
+3. **Ask or investigate.** Ask questions about reviewers, expertise, decisions, contributors, or repository records; or choose a GitHub issue to investigate with the code graph.
+4. **Inspect evidence and changes.** Follow the graph, inspect source links and Cypher, or review the issue repair’s selected files, diff, test output, and graph trace.
+5. **Keep useful findings.** Signed-in users can save an investigation to ProjectMemory for later related questions. Guest questions are read-only and are not saved as personal memory.
 
 ## Product flows at a glance
 
@@ -42,6 +46,21 @@ Public guest graphs are isolated by repository. Guest questions are read-only an
 
 ![Graph explorer flow from a focus node through FalkorDB neighborhood queries, filters, and following connected nodes](docs/flow-graph-explorer.svg)
 
+## Graph-guided issue investigation and local repair
+
+The issue-repair flow is available to signed-in users for repositories explicitly enabled in the local repair configuration.
+
+1. Open **Code graph**, refresh the issue list, and import the selected repository's current default-branch source snapshot.
+2. Select an issue and choose **Fix selected issue**. Engram refreshes the issue details and asks the FastAPI graph investigator for related records from the selected user's FalkorDB graph.
+3. The repair workflow matches issue terms against indexed file and symbol metadata, then follows stored `TESTS` relationships to identify a related test file. It stops if the graph cannot identify both source and test candidates.
+4. A configured model receives the issue, graph evidence, and bounded snippets from graph-selected files. The patch is restricted to those paths, must include a change to a selected test file, and is limited to six files.
+5. Engram fetches the current base branch, creates an `engram/issue-*` branch in the configured checkout, applies the patch, and runs the linked Python `pytest` checks. Existing checkout changes are kept in a recoverable stash. The branch is committed only when checks pass; a failed repair is discarded and the original branch restored.
+
+The review page shows the issue, proposed summary, branch and base commit, changed files, diff, test output, and FalkorDB trace. The current repair flow ends with a local branch and review page.
+
+Configure `ENGRAM_REPAIR_ROOT` and, if Engram should use an existing checkout, map `owner/repo` to its path in `ENGRAM_REPAIR_CHECKOUTS`. Otherwise it creates a local clone under the repair root. After a repair, `git branch --show-current` in that checkout shows the issue branch. Any stash created to preserve pre-existing work is retained for recovery.
+
+
 ## Reviewer intelligence: find a reviewer from graph evidence
 
 Start with a public repository and one of its pull requests. Ask, “Who should review this change?” The Reviewer Router reads the pull request’s changed files, follows those files to earlier pull requests, then follows submitted reviews to the contributors who reviewed that work. It ranks candidates from those observed connections and returns the supporting repository records with GitHub links.
@@ -49,19 +68,6 @@ Start with a public repository and one of its pull requests. Ask, “Who should 
 The graph explorer makes that reasoning inspectable. **All** shows the connected neighborhood; PRs, Issues, Reviews, Reviewers, Assignees, Commits, Comments, Files, Contributors, and Labels narrow it to matching graph records or relationships. Select a node to inspect its properties and direct links, then follow it to load a new neighborhood. The same paths can be inspected through the Cypher query and parameters shown with an answer.
 
 In the explorer, **Reviews** and **Reviewers** filters make it easier to inspect the connections among changed files, earlier pull requests, and review activity. Those same paths appear in the Cypher trace attached to an answer.
-
-## Issue repair: from issue report to a reviewed local change
-
-1. In a signed-in repository, open **Code graph**, refresh the current issue list, and import the current default-branch source snapshot.
-2. Select an issue and choose **Fix selected issue**. Engram fetches its current GitHub details and asks the FastAPI graph investigator for related evidence from the selected user's FalkorDB graph.
-3. The repair agent compares issue terms and graph evidence with indexed file and symbol properties, then follows stored `TESTS` relationships to select regression-test files. It requires graph-selected source and test files before proceeding.
-4. The configured model receives the issue, graph evidence, and a bounded set of selected source snippets. Engram accepts changes only to the selected file paths and requires at least one selected test file to change.
-5. Engram fetches the latest base branch, creates an `engram/issue-*` branch in the configured checkout, applies the patch, and runs targeted checks. Existing checkout changes are preserved in a recoverable stash. A local commit is made only if the checks pass.
-
-The review page presents the issue, model summary, branch and base commit, changed files, diff, test output, and a separate FalkorDB trace. Its approval control is a review affordance in the current local flow.
-
-Configure `ENGRAM_REPAIR_ROOT` and, if you want Engram to use an existing checkout, map `owner/repo` to its path in `ENGRAM_REPAIR_CHECKOUTS` as described below. Otherwise Engram creates a local clone under the repair root. After a repair, `git branch --show-current` in that checkout shows the active issue branch. If Engram stashed pre-existing changes, inspect `git stash list`; the stash is retained for explicit recovery and is not dropped automatically.
-
 
 ## How the agent works
 
@@ -81,7 +87,7 @@ flowchart LR
   G -. relevant saved context .-> L
 ```
 
-The LangGraph workflow contains a planner, a saved-memory retrieval step, an MCP tool call, and a grounded answer step. Gemini can select a read-only tool and phrase the graph-derived draft when configured. Deterministic routing and answer templates remain available without a model key. The model does not supply the underlying repository facts.
+The LangGraph workflow routes the question, retrieves matching saved memory, calls one graph tool through MCP, and grounds the response in the returned records. A configured Gemini key can select the specialist tool; a workspace or user-selected provider can phrase the graph-derived answer. Without a model, deterministic routing and answer templates are used. Graph records and GitHub sources provide the repository evidence.
 
 The five specialist tools are:
 
@@ -109,11 +115,11 @@ Parameterized Cypher traversals find the connected records and calculate evidenc
 
 ### What Engram stores and traverses
 
-The diagram below documents the graph schema written by the GitHub importer, source-code indexer, and agent workflow. A reviewer investigation follows connected PR, file, review, and contributor records; issue repair uses the indexed `CodeFile`, `CodeSymbol`, and `TestFile` neighborhood. Code-structure links share the `CODE_RELATION` relationship type and carry their specific edge kind in its `kind` property.
+The diagram shows representative graph paths written by the GitHub importer, source indexer, and agent workflow; it is not an exhaustive schema. Reviewer investigations follow pull requests, files, reviews, and contributors. Issue repair uses `CodeFile`, `CodeSymbol`, and `TestFile` records. Code-structure edges use `CODE_RELATION` with `IMPORTS`, `DEFINES`, or `TESTS` in the `kind` property.
 
-![Engram FalkorDB graph schema: repository activity, code structure, and agent memory](docs/falkordb-graph.svg)
+![Representative FalkorDB graph paths for repository activity, code structure, and agent memory](docs/falkordb-graph.svg)
 
-Code graph nodes store metadata such as paths, hashes, summaries, and parsed symbols rather than source bodies. During repair, Engram reads source text from the selected base only for candidate files chosen with FalkorDB evidence.
+The source index catalogs `.py`, `.js`, `.jsx`, `.ts`, `.tsx`, `.go`, `.rs`, `.java`, and `.rb` files. It parses Python ASTs for class/function symbols and imports; other supported files receive file metadata but not language-specific symbol graphs. Test relationships are inferred from repository paths and matching file stems. Source bodies are read from the selected base during repair only for files chosen using FalkorDB evidence.
 
 
 ## Capability map
@@ -127,9 +133,9 @@ Code graph nodes store metadata such as paths, hashes, summaries, and parsed sym
 | Review graph paths and source records | Cypher trace, source links, neighborhood explorer, node detail |
 | Filter and follow graph connections | FalkorDB-backed All, PR, issue, review, reviewer, assignee, commit, comment, file, contributor, and label views |
 | Remember an investigation across sessions | `Episode` nodes, user-saved `ProjectMemory` nodes, `HAS_MEMORY`, `PRESERVES`, and `GROUNDED_IN` relationships |
-| Import source structure for issue repair | Current GitHub default-branch snapshot, parsed into `CodeFile`, `CodeSymbol`, and `TestFile` nodes with `IMPORTS`, `DEFINES`, and graph-linked `TESTS` edges in FalkorDB; repair reads source from the selected base only for graph-selected files |
+| Import source structure for issue repair | The index stores file metadata for supported source suffixes; Python AST parsing extracts symbols and imports, and matching file stems infer `TESTS` edges. Repair reads source from the selected base only for graph-selected files and currently requires linked Python `pytest` tests |
 | Prepare a local issue repair | Graph-linked investigator, bounded model patch generation, active issue branch in the configured checkout, focused checks, local commit, diff review, and a separate graph trace page |
-| Use natural phrasing when configured | Optional provider tool selection and constrained graph-grounded synthesis with deterministic fallback |
+| Phrase graph-grounded answers | Optional configured model synthesis; deterministic answer templates remain available without a model |
 
 ## Architecture
 
@@ -141,7 +147,7 @@ Code graph nodes store metadata such as paths, hashes, summaries, and parsed sym
 | Tool boundary | FastMCP | Exposes the repository investigators through MCP discovery and tool calls |
 | Graph store | FalkorDB | Stores typed repository entities, their relationships, episodes, and saved project memory |
 | Source data | GitHub REST API | Supplies current public or installation-authorized repository activity |
-| Optional model | Gemini, OpenAI, Anthropic, Groq, OpenRouter, Together, DeepSeek, or Ollama | Optional tool selection, answer phrasing, and issue patch proposals; graph results remain the source of repository facts |
+| Optional model | Gemini, OpenAI, Anthropic, Groq, OpenRouter, Together, DeepSeek, or Ollama | Phrases graph-grounded answers and proposes issue patches; Gemini can select the graph tool when configured. Deterministic routing remains available. |
 | Local/deployment services | Docker Compose, Caddy | Runs the graph and Python core locally; production Compose adds HTTPS reverse proxying |
 
 The browser never connects directly to FalkorDB or the Python core. Next.js validates the user session and selected repository, then calls FastAPI over an internal key-protected service boundary. The core derives the graph name from the verified GitHub user ID and repository.
@@ -164,22 +170,25 @@ The browser never connects directly to FalkorDB or the Python core. Next.js vali
 | `Episode` | Question, graph-grounded answer, investigator, evidence count, and source metadata |
 | `ProjectMemory` | User-saved investigation, timestamp, and graph links to the episode and source records |
 
-Relationships include `HAS_ITEM`, `OPENED`, `ASSIGNED`, `REVIEW_REQUESTED`, `MODIFIES`, `SUBMITTED`, `ON_PR`, `WROTE`, `ON_ITEM`, `HAS_COMMIT`, `AUTHORED`, `HAS_BRANCH`, `ON_BRANCH`, `CLOSES`, and `HAS_LABEL`. Agent memory uses `HAS_MEMORY`, `PRESERVES`, and `GROUNDED_IN`; agent coordination records `HANDED_OFF_TO`. Source-code links are stored as `CODE_RELATION` edges with `IMPORTS`, `DEFINES`, or `TESTS` in the `kind` property. Engram's explorer shows a bounded neighborhood and lets the user follow connections, rather than drawing every record at once.
+Relationships include `HAS_ITEM`, `HAS_CONTRIBUTOR`, `OPENED`, `ASSIGNED`, `REVIEW_REQUESTED`, `MODIFIES`, `SUBMITTED`, `ON_PR`, `WROTE`, `ON_ITEM`, `HAS_COMMIT`, `AUTHORED`, `HAS_BRANCH`, `ON_BRANCH`, `CLOSES`, and `HAS_LABEL`. Agent memory uses `HAS_MEMORY`, `PRESERVES`, and `GROUNDED_IN`; agent coordination records `HANDED_OFF_TO`. Source-code links are stored as `CODE_RELATION` edges with `IMPORTS`, `DEFINES`, or `TESTS` in the `kind` property. Engram's explorer shows a bounded neighborhood and lets the user follow connections, rather than drawing every record at once.
 
 ## Data freshness and scope
 
-Imports check GitHub when a user requests a sync or refresh. Guest imports use unauthenticated public endpoints; signed-in imports use the selected installation's token. Engram displays the last GitHub check and newest activity found in the indexed data. If GitHub is rate-limited or unavailable, the last successful graph snapshot remains available and the UI reports the refresh failure.
+Signed-in imports check GitHub when a user requests a sync or refresh; guest imports use unauthenticated public endpoints. Engram displays the last GitHub check and newest activity found in the indexed data. A failed refresh does not delete the last successful graph snapshot; the refresh request reports the GitHub error.
 
-The importer intentionally indexes a bounded recent window: up to 200 recently updated pull requests and issues, selected reviews, comments and changed files, up to 100 contributors, and up to 200 deduplicated commits across recent branches. This is a recent-activity graph, not a complete historical archive or a streaming mirror. Public GitHub rate limits and repository activity determine the data available to an import.
+Signed-in imports index up to 200 recently updated pull requests and 200 issues. Detailed reviews, comments, and changed files are fetched for the 50 most recently updated pull requests; comments are fetched for the 50 most recently updated issues. The importer also reads up to 100 contributors and branch records, then indexes up to 200 deduplicated commits from the default branch and up to 12 recently active branches.
+
+Guest imports use a smaller public-API window: up to 30 pull requests, one page of the issues endpoint (pull-request rows are filtered out), 40 commits, and 30 branches. Reviews, files, and comments are fetched for up to five pull requests and comments for up to three issues. Public graph snapshots are reused for five minutes before another GitHub fetch is attempted. Both modes create recent snapshots rather than a complete historical archive or a streaming mirror. GitHub rate limits and repository activity affect what an import can retrieve.
 
 ## Security and data boundaries
 
 - GitHub OAuth state and PKCE protect the sign-in callback; the session cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` in production.
-- GitHub credentials, installation tokens, the App private key, and the internal service key stay on the server. A cloned repository does not contain the owner's credentials or session.
+- GitHub access tokens are held in an encrypted, `HttpOnly` session cookie. The GitHub App private key and internal service key stay server-side; a cloned repository does not contain the owner's credentials.
 - Private graph names are derived from the verified GitHub user ID and selected repository. Chat, saved memory, graph exploration, and node detail use that same server-verified scope.
 - Guest import accepts public repositories only. Guest graphs use a separate reserved identity, guest chat does not save episodes, and guests cannot save personal project memory.
 - The GitHub App requests read access for repository contents, issues, pull requests, and metadata. The issue repair process operates on the configured local checkout.
 - Saved memory is an explicit user action. It preserves a graph-derived answer and source links; users can inspect or remove saved items from the repository's Saved memory page.
+- A user-supplied model key is held in browser `sessionStorage` and sent with chat or repair requests. It is not stored in FalkorDB.
 
 ## Run locally
 
@@ -226,7 +235,7 @@ npm run build
 npm run test:e2e
 ```
 
-The Node tests cover GitHub setup and OAuth routes, guest access boundaries, saved-memory authorization, cache headers, and service-status redaction. To run the Python unit tests, install `backend/requirements.txt` and run:
+With the app and configured services running at `http://localhost:3100`, the Node integration suite exercises GitHub setup and status routes, guest access boundaries, saved-memory authorization, cache headers, and service-status redaction. To run the Python unit tests, install `backend/requirements.txt` and run:
 
 ```sh
 python3 -m pip install -r backend/requirements.txt
@@ -235,7 +244,7 @@ PYTHONPATH=backend python3 -m unittest discover -s backend/tests
 
 ## Trade-offs
 
-Engram uses deterministic Cypher builders for explainable, bounded graph access. This is easier to audit than unrestricted text-to-Cypher, though it limits the range of questions. A configured model can help with tool selection and phrasing, but is optional and receives bounded graph-derived context. Imports are recent snapshots rather than a full archive; a public multi-replica deployment should add a shared rate limiter, background sync queue, and webhook-driven updates before increasing import depth.
+Engram uses deterministic Cypher builders for explainable, bounded graph access. This is easier to audit than unrestricted text-to-Cypher, though it limits the range of questions. A configured model can phrase graph-grounded answers; Gemini can also select a specialist tool. Model use is optional for repository questions, which fall back to deterministic routing and templates. Issue repair requires a configured provider. The current targeted test runner uses graph-linked Python `pytest` files. Imports are recent snapshots rather than a full archive; a public multi-replica deployment should add a shared rate limiter, background sync queue, and webhook-driven updates before increasing import depth.
 
 Repository activity is read-only; saving project memory is an explicit action within the user's private Engram graph.
 
