@@ -48,7 +48,7 @@ Start with a public repository and one of its pull requests. Ask, “Who should 
 
 The graph explorer makes that reasoning inspectable. **All** shows the connected neighborhood; PRs, Issues, Reviews, Reviewers, Assignees, Commits, Comments, Files, Contributors, and Labels narrow it to matching graph records or relationships. Select a node to inspect its properties and direct links, then follow it to load a new neighborhood. The same paths can be inspected through the Cypher query and parameters shown with an answer.
 
-To see why the graph matters, follow the recommendation in the explorer and filter to **Reviews** or **Reviewers**. The result comes from a path through changed files, prior pull requests, and review activity, rather than a keyword match alone.
+In the explorer, **Reviews** and **Reviewers** filters make it easier to inspect the connections among changed files, earlier pull requests, and review activity. Those same paths appear in the Cypher trace attached to an answer.
 
 ## Issue repair: from issue report to a reviewed local change
 
@@ -60,9 +60,8 @@ To see why the graph matters, follow the recommendation in the explorer and filt
 
 The review page presents the issue, model summary, branch and base commit, changed files, diff, test output, and a separate FalkorDB trace. Its approval control is a review affordance in the current local flow.
 
-Configure `ENGRAM_REPAIR_ROOT` and, if you want Engram to use an existing checkout, map `owner/repo` to its path in `ENGRAM_REPAIR_CHECKOUTS` as described below. Otherwise Engram creates a local clone under the repair root. After a repair, `git branch --show-current` in that checkout shows the active issue branch. If Engram stashed pre-existing changes, inspect `git stash list`; the stash is retained for explicit recovery and is not dropped automatically. Review the generated patch and test result critically; a model-proposed fix is not proof of correctness.
+Configure `ENGRAM_REPAIR_ROOT` and, if you want Engram to use an existing checkout, map `owner/repo` to its path in `ENGRAM_REPAIR_CHECKOUTS` as described below. Otherwise Engram creates a local clone under the repair root. After a repair, `git branch --show-current` in that checkout shows the active issue branch. If Engram stashed pre-existing changes, inspect `git stash list`; the stash is retained for explicit recovery and is not dropped automatically.
 
-See [the 3–4 minute demo script](docs/DEMO_SCRIPT.md) for the click path and narration.
 
 ## How the agent works
 
@@ -110,13 +109,12 @@ Parameterized Cypher traversals find the connected records and calculate evidenc
 
 ### What Engram stores and traverses
 
-The diagram below documents the graph schema written by the GitHub importer, source-code indexer, and agent workflow. A reviewer investigation follows connected PR, file, review, and contributor records; issue repair uses the indexed `CodeFile`, `CodeSymbol`, and `TestFile` neighborhood. These are real FalkorDB labels and relationships from the implementation. Code-structure links share the `CODE_RELATION` relationship type and carry their specific edge kind in its `kind` property.
+The diagram below documents the graph schema written by the GitHub importer, source-code indexer, and agent workflow. A reviewer investigation follows connected PR, file, review, and contributor records; issue repair uses the indexed `CodeFile`, `CodeSymbol`, and `TestFile` neighborhood. Code-structure links share the `CODE_RELATION` relationship type and carry their specific edge kind in its `kind` property.
 
 ![Engram FalkorDB graph schema: repository activity, code structure, and agent memory](docs/falkordb-graph.svg)
 
 Code graph nodes store metadata such as paths, hashes, summaries, and parsed symbols rather than source bodies. During repair, Engram reads source text from the selected base only for candidate files chosen with FalkorDB evidence.
 
-*Schema view, not a live database screenshot. The graph explorer and the Cypher shown with an answer expose the records and paths imported for the selected repository.*
 
 ## Capability map
 
@@ -241,4 +239,4 @@ Engram uses deterministic Cypher builders for explainable, bounded graph access.
 
 Repository activity is read-only; saving project memory is an explicit action within the user's private Engram graph.
 
-Code repair is a separate opt-in action. The selected issue, graph evidence, and a bounded set of graph-selected source and test snippets are sent to the configured model provider. Engram validates the returned diff and targeted tests before it keeps a local branch and commit in the configured checkout; existing local changes are preserved in a recoverable stash. Report a repair with the model and test output from that run.
+Code repair is a separate opt-in action. The selected issue, graph evidence, and a bounded set of graph-selected source and test snippets are sent to the configured model provider. Engram validates the returned diff and targeted tests before it keeps a local branch and commit in the configured checkout; existing local changes are preserved in a recoverable stash.
